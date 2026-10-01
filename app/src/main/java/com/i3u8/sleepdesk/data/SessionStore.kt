@@ -58,6 +58,7 @@ class SessionStore(context: Context) {
         if (!root.optBoolean("running", false)) return null
         val current = parseSession(root.getJSONObject("current"))
         current.endMs = System.currentTimeMillis()
+        current.materializeSegments()
         val history = loadHistoryUnlocked().toMutableList()
         history.add(0, current)
         while (history.size > MAX_HISTORY) {
@@ -128,7 +129,7 @@ class SessionStore(context: Context) {
     private fun writeRoot(running: Boolean, current: SleepSession?, history: List<SleepSession>) {
         val root = JSONObject()
         root.put("running", running)
-        root.put("version", 2)
+        root.put("version", 3)
         if (current != null) root.put("current", toJson(current)) else root.put("current", JSONObject.NULL)
         val arr = JSONArray()
         for (s in history) arr.put(toJson(s))
@@ -158,7 +159,69 @@ class SessionStore(context: Context) {
         }
         o.put("events", arr)
         o.put("audioEvents", arr) // alias per audio-algo.md
+        val segArr = JSONArray()
+        for (seg in s.segments) segArr.put(segmentToJson(seg))
+        o.put("segments", segArr)
         return o
+    }
+
+    private fun segmentToJson(seg: NightSegment): JSONObject {
+        val o = JSONObject()
+        o.put("id", seg.id)
+        o.put("sessionId", seg.sessionId)
+        o.put("startMs", seg.startMs)
+        o.put("endMs", seg.endMs)
+        o.put("primaryLabel", seg.primaryLabel)
+        val labels = JSONObject()
+        for ((k, v) in seg.labels) labels.put(k, v)
+        o.put("labels", labels)
+        val eventIds = JSONArray()
+        for (id in seg.eventIds) eventIds.put(id)
+        o.put("eventIds", eventIds)
+        val clips = JSONArray()
+        for (p in seg.representativeClipPaths) clips.put(p)
+        o.put("representativeClipPaths", clips)
+        o.put("peakConfidence", seg.peakConfidence.toDouble())
+        o.put("peakDb", seg.peakDb)
+        o.put("snoreMinutes", seg.snoreMinutes.toDouble())
+        val aux = JSONArray()
+        for (a in seg.auxFlags) aux.put(a)
+        o.put("auxFlags", aux)
+        o.put("algoVersion", seg.algoVersion ?: JSONObject.NULL)
+        o.put("segmentVersion", seg.segmentVersion)
+        return o
+    }
+
+    private fun parseSegment(o: JSONObject): NightSegment {
+        val labels = mutableMapOf<String, Int>()
+        val labelsObj = o.optJSONObject("labels")
+        if (labelsObj != null) {
+            val keys = labelsObj.keys()
+            while (keys.hasNext()) {
+                val k = keys.next()
+                labels[k] = labelsObj.optInt(k, 0)
+            }
+        }
+        fun stringList(key: String): List<String> {
+            val arr = o.optJSONArray(key) ?: return emptyList()
+            return (0 until arr.length()).map { arr.getString(it) }
+        }
+        return NightSegment(
+            id = o.optString("id", ""),
+            sessionId = o.optString("sessionId", ""),
+            startMs = o.getLong("startMs"),
+            endMs = o.getLong("endMs"),
+            primaryLabel = o.optString("primaryLabel", "MIXED"),
+            labels = labels,
+            eventIds = stringList("eventIds"),
+            representativeClipPaths = stringList("representativeClipPaths"),
+            peakConfidence = o.optDouble("peakConfidence", 0.0).toFloat(),
+            peakDb = o.optDouble("peakDb", 0.0),
+            snoreMinutes = o.optDouble("snoreMinutes", 0.0).toFloat(),
+            auxFlags = stringList("auxFlags"),
+            algoVersion = if (o.isNull("algoVersion")) null else o.optString("algoVersion"),
+            segmentVersion = o.optString("segmentVersion", "seg-v1")
+        )
     }
 
     private fun parseSession(o: JSONObject): SleepSession {
@@ -181,11 +244,19 @@ class SessionStore(context: Context) {
                 )
             )
         }
+        val segments = mutableListOf<NightSegment>()
+        val segArr = o.optJSONArray("segments")
+        if (segArr != null) {
+            for (i in 0 until segArr.length()) {
+                segments.add(parseSegment(segArr.getJSONObject(i)))
+            }
+        }
         return SleepSession(
             id = o.optString("id", UUID.randomUUID().toString()),
             startMs = o.getLong("startMs"),
             endMs = end,
-            events = events
+            events = events,
+            segments = segments
         )
     }
 

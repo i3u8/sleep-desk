@@ -10,6 +10,7 @@ import android.view.View
 import androidx.core.content.ContextCompat
 import com.i3u8.sleepdesk.R
 import com.i3u8.sleepdesk.audio.NightEventType
+import com.i3u8.sleepdesk.data.NightSegment
 import com.i3u8.sleepdesk.data.SleepEvent
 import com.i3u8.sleepdesk.data.SleepSession
 import java.text.SimpleDateFormat
@@ -20,13 +21,9 @@ import kotlin.math.max
 import kotlin.math.min
 
 /**
- * Multi-layer full-night timeline:
- * 1) experimental cycle band (optional)
- * 2) acoustic activity band
- * 3) event markers + interrupt ticks
- * 4) time axis
- *
- * Taps near an event marker invoke [onEventTap].
+ * Segment-first full-night timeline (docs/segments.md):
+ * colored segment bands + thin activity ribbon + interrupt / clip ticks.
+ * Tap a segment → [onSegmentTap]. Full event flood omitted.
  */
 class NightTimelineView @JvmOverloads constructor(
     context: Context,
@@ -35,10 +32,10 @@ class NightTimelineView @JvmOverloads constructor(
 ) : View(context, attrs, defStyleAttr) {
 
     private var session: SleepSession? = null
-    private var showCycles: Boolean = true
+    private var segments: List<NightSegment> = emptyList()
     private var activity: List<NightTimelineHeuristics.ActivityBin> = emptyList()
-    private var cycles: List<NightTimelineHeuristics.CycleBand> = emptyList()
-    private var onEventTap: ((SleepEvent) -> Unit)? = null
+    private var onSegmentTap: ((NightSegment) -> Unit)? = null
+    private var showActivityRibbon: Boolean = true
 
     private val padL = 12f * resources.displayMetrics.density
     private val padR = 12f * resources.displayMetrics.density
@@ -55,12 +52,8 @@ class NightTimelineView @JvmOverloads constructor(
         textSize = 11f * resources.displayMetrics.scaledDensity
         textAlign = Paint.Align.CENTER
     }
-    private val bandPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        style = Paint.Style.FILL
-    }
-    private val markerPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        style = Paint.Style.FILL
-    }
+    private val bandPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
+    private val markerPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
     private val interruptPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = ContextCompat.getColor(context, R.color.warning)
         strokeWidth = 2.5f * resources.displayMetrics.density
@@ -70,47 +63,49 @@ class NightTimelineView @JvmOverloads constructor(
         color = ContextCompat.getColor(context, R.color.card_stroke)
         strokeWidth = 1f
     }
+    private val strokeBand = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.STROKE
+        strokeWidth = 1.5f * resources.displayMetrics.density
+        color = 0x33FFFFFF
+    }
     private val rect = RectF()
-    private val hitSlop = 18f * resources.displayMetrics.density
-    private val markerHits = mutableListOf<Pair<Float, SleepEvent>>()
+    private val hitSlop = 12f * resources.displayMetrics.density
+    private val segmentHits = mutableListOf<Pair<RectF, NightSegment>>()
 
-    private val colorSnore = 0xFF60A5FA.toInt()
-    private val colorCough = 0xFFF97316.toInt()
-    private val colorSpeech = 0xFFA78BFA.toInt()
-    private val colorWake = 0xFFEF4444.toInt()
-    private val colorEnv = 0xFF94A3B8.toInt()
-    private val colorAbnormal = 0xFFFBBF24.toInt()
-    private val colorDefault = 0xFF7C9CFF.toInt()
+    private val colorSnore = 0xAA60A5FA.toInt()
+    private val colorCough = 0xAAF97316.toInt()
+    private val colorSpeech = 0xAAA78BFA.toInt()
+    private val colorWake = 0xAAEF4444.toInt()
+    private val colorAbnormal = 0xAAFBBF24.toInt()
+    private val colorMixed = 0xAA94A3B8.toInt()
+    private val colorDefault = 0xAA7C9CFF.toInt()
     private val colorActivity = 0xFF38BDF8.toInt()
-    private val colorCycleWake = 0x66F87171.toInt()
-    private val colorCycleQuiet = 0x6634D399.toInt()
-    private val colorCycleRem = 0x66C084FC.toInt()
+    private val colorClipTick = 0xFFE2E8F0.toInt()
 
     fun setSession(
         session: SleepSession,
-        showExperimentalCycles: Boolean = true,
-        onEventTap: ((SleepEvent) -> Unit)? = null
+        showActivityRibbon: Boolean = true,
+        onSegmentTap: ((NightSegment) -> Unit)? = null
     ) {
         this.session = session
-        this.showCycles = showExperimentalCycles
-        this.onEventTap = onEventTap
-        this.activity = NightTimelineHeuristics.activityBins(session)
-        this.cycles = if (showExperimentalCycles) {
-            NightTimelineHeuristics.experimentalCycles(session)
+        this.showActivityRibbon = showActivityRibbon
+        this.onSegmentTap = onSegmentTap
+        this.segments = session.ensureSegments()
+        this.activity = if (showActivityRibbon) {
+            NightTimelineHeuristics.activityBins(session, binMs = 5 * 60_000L)
         } else emptyList()
         invalidate()
+        requestLayout()
     }
 
-    fun setShowCycles(show: Boolean) {
-        showCycles = show
-        val s = session ?: return
-        cycles = if (show) NightTimelineHeuristics.experimentalCycles(s) else emptyList()
-        invalidate()
-    }
+    fun getSegments(): List<NightSegment> = segments
+
+    @Deprecated("Cycles replaced by segments in v0.3")
+    fun setShowCycles(show: Boolean) { /* no-op */ }
 
     override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
         val density = resources.displayMetrics.density
-        val desired = (if (showCycles) 168f else 128f) * density
+        val desired = (if (showActivityRibbon) 148f else 112f) * density
         val w = MeasureSpec.getSize(widthMeasureSpec)
         val hMode = MeasureSpec.getMode(heightMeasureSpec)
         val hSize = MeasureSpec.getSize(heightMeasureSpec)
@@ -124,7 +119,7 @@ class NightTimelineView @JvmOverloads constructor(
 
     override fun onDraw(canvas: Canvas) {
         super.onDraw(canvas)
-        markerHits.clear()
+        segmentHits.clear()
         val s = session ?: return
         val start = s.startMs
         val end = (s.endMs ?: System.currentTimeMillis()).coerceAtLeast(start + 60_000L)
@@ -135,78 +130,77 @@ class NightTimelineView @JvmOverloads constructor(
         if (chartW <= 0f) return
 
         var y = padT
-        val cycleH = if (showCycles && cycles.isNotEmpty()) height * 0.22f else 0f
-        val activityH = height * 0.28f
-        val eventsH = height * (if (showCycles) 0.28f else 0.42f)
+        val segH = height * (if (showActivityRibbon) 0.42f else 0.58f)
+        val activityH = if (showActivityRibbon) height * 0.22f else 0f
+        val ticksH = height * 0.12f
         val axisY = height - padB + 4f
-
-        // --- Experimental cycle band ---
-        if (cycleH > 0f) {
-            for (band in cycles) {
-                val x0 = chartL + ((band.startMs - start) / span) * chartW
-                val x1 = chartL + ((band.endMs - start) / span) * chartW
-                bandPaint.color = when (band.kind) {
-                    NightTimelineHeuristics.CycleKind.WAKE_ISH -> colorCycleWake
-                    NightTimelineHeuristics.CycleKind.QUIETER_NREM_ISH -> colorCycleQuiet
-                    NightTimelineHeuristics.CycleKind.REM_ISH -> colorCycleRem
-                }
-                rect.set(x0, y, x1, y + cycleH)
-                canvas.drawRoundRect(rect, 4f, 4f, bandPaint)
-            }
-            y += cycleH + 6f * resources.displayMetrics.density
-        }
-
-        // --- Activity band ---
-        val actTop = y
-        val actBottom = y + activityH
-        // baseline track
-        bandPaint.color = 0x221E293B
-        rect.set(chartL, actTop, chartR, actBottom)
-        canvas.drawRoundRect(rect, 6f, 6f, bandPaint)
-        for (bin in activity) {
-            val x0 = chartL + ((bin.startMs - start) / span) * chartW
-            val x1 = chartL + ((bin.endMs - start) / span) * chartW
-            val alpha = (40 + (bin.level * 180).toInt()).coerceIn(40, 220)
-            bandPaint.color = (alpha shl 24) or (colorActivity and 0x00FFFFFF)
-            val h = max(2f, activityH * (0.15f + bin.level * 0.85f))
-            rect.set(x0, actBottom - h, x1, actBottom)
-            canvas.drawRect(rect, bandPaint)
-        }
-        y = actBottom + 8f * resources.displayMetrics.density
-
-        // --- Event / interrupt layer ---
-        val evTop = y
-        val evBottom = y + eventsH
-        canvas.drawLine(chartL, evBottom, chartR, evBottom, guidePaint)
-
-        val events = s.events.sortedBy { it.timeMs }
         val density = resources.displayMetrics.density
-        for (e in events) {
+
+        val segTop = y
+        val segBottom = y + segH
+        bandPaint.color = 0x221E293B
+        rect.set(chartL, segTop, chartR, segBottom)
+        canvas.drawRoundRect(rect, 8f, 8f, bandPaint)
+
+        for (seg in segments) {
+            val x0 = chartL + ((seg.startMs - start) / span) * chartW
+            val x1 = chartL + ((seg.endMs - start) / span) * chartW
+            val xRight = max(x0 + 3f * density, x1)
+            bandPaint.color = colorForLabel(seg.primaryLabel)
+            rect.set(x0 + 1f, segTop + 2f, xRight - 1f, segBottom - 2f)
+            canvas.drawRoundRect(rect, 5f, 5f, bandPaint)
+            canvas.drawRoundRect(rect, 5f, 5f, strokeBand)
+            segmentHits.add(RectF(rect) to seg)
+
+            val clipN = seg.representativeClipPaths.size
+            if (clipN > 0) {
+                markerPaint.color = colorClipTick
+                val cx = (x0 + xRight) / 2f
+                for (i in 0 until clipN) {
+                    val dx = (i - (clipN - 1) / 2f) * 6f * density
+                    canvas.drawCircle(cx + dx, segTop + 8f * density, 2.2f * density, markerPaint)
+                }
+            }
+        }
+        y = segBottom + 6f * density
+
+        if (activityH > 0f && activity.isNotEmpty()) {
+            val actTop = y
+            val actBottom = y + activityH
+            bandPaint.color = 0x221E293B
+            rect.set(chartL, actTop, chartR, actBottom)
+            canvas.drawRoundRect(rect, 4f, 4f, bandPaint)
+            for (bin in activity) {
+                val x0 = chartL + ((bin.startMs - start) / span) * chartW
+                val x1 = chartL + ((bin.endMs - start) / span) * chartW
+                val alpha = (35 + (bin.level * 170).toInt()).coerceIn(35, 205)
+                bandPaint.color = (alpha shl 24) or (colorActivity and 0x00FFFFFF)
+                val h = max(2f, activityH * (0.12f + bin.level * 0.88f))
+                rect.set(x0, actBottom - h, x1, actBottom)
+                canvas.drawRect(rect, bandPaint)
+            }
+            y = actBottom + 6f * density
+        }
+
+        val tickTop = y
+        val tickBottom = y + ticksH
+        canvas.drawLine(chartL, tickBottom, chartR, tickBottom, guidePaint)
+        for (e in s.events) {
             if (e.timeMs < start || e.timeMs > end) continue
             val x = chartL + ((e.timeMs - start) / span) * chartW
             if (NightTimelineHeuristics.isInterrupt(e.type)) {
-                canvas.drawLine(x, evTop, x, evBottom, interruptPaint)
-                // small triangle tip
-                markerPaint.color = ContextCompat.getColor(context, R.color.warning)
-                canvas.drawCircle(x, evTop + 3f * density, 3.5f * density, markerPaint)
-                markerHits.add(x to e)
-            } else if (NightTimelineHeuristics.isAudioEvent(e.type)) {
-                markerPaint.color = colorForType(e.type)
-                val dur = (e.endMs - e.timeMs).coerceAtLeast(0L)
-                val w = max(3f * density, min(14f * density, (dur / span) * chartW))
-                val blockH = when (e.type) {
-                    NightEventType.SNORE.name -> eventsH * 0.55f
-                    NightEventType.NIGHT_WAKE_SOUND.name,
-                    NightEventType.COUGH.name -> eventsH * 0.85f
-                    else -> eventsH * 0.65f
-                }
-                rect.set(x - w / 2f, evBottom - blockH, x + w / 2f, evBottom)
-                canvas.drawRoundRect(rect, 3f, 3f, markerPaint)
-                markerHits.add(x to e)
+                canvas.drawLine(x, tickTop, x, tickBottom, interruptPaint)
+            }
+        }
+        markerPaint.color = colorClipTick
+        for (seg in segments) {
+            for (path in seg.representativeClipPaths) {
+                val ev = s.events.firstOrNull { it.clipRelativePath == path } ?: continue
+                val x = chartL + ((ev.timeMs - start) / span) * chartW
+                canvas.drawCircle(x, (tickTop + tickBottom) / 2f, 3.2f * density, markerPaint)
             }
         }
 
-        // --- Time axis labels ---
         val fmt = SimpleDateFormat("HH:mm", Locale.getDefault())
         val ticks = 5
         for (i in 0 until ticks) {
@@ -223,13 +217,13 @@ class NightTimelineView @JvmOverloads constructor(
         }
     }
 
-    private fun colorForType(type: String): Int = when (type) {
+    private fun colorForLabel(label: String): Int = when (label) {
         NightEventType.SNORE.name -> colorSnore
         NightEventType.COUGH.name -> colorCough
         NightEventType.SPEECH.name -> colorSpeech
         NightEventType.NIGHT_WAKE_SOUND.name -> colorWake
-        NightEventType.ENV_NOISE.name -> colorEnv
         NightEventType.ABNORMAL.name -> colorAbnormal
+        "MIXED" -> colorMixed
         else -> colorDefault
     }
 
@@ -238,17 +232,28 @@ class NightTimelineView @JvmOverloads constructor(
             return event.action == MotionEvent.ACTION_DOWN || super.onTouchEvent(event)
         }
         val x = event.x
-        var best: SleepEvent? = null
-        var bestDist = hitSlop
-        for ((mx, ev) in markerHits) {
-            val d = abs(mx - x)
-            if (d <= bestDist) {
-                bestDist = d
-                best = ev
+        val y = event.y
+        for ((r, seg) in segmentHits) {
+            if (r.contains(x, y) || (abs(y - (r.top + r.bottom) / 2f) < hitSlop * 3 &&
+                    x >= r.left - hitSlop && x <= r.right + hitSlop)
+            ) {
+                onSegmentTap?.invoke(seg)
+                performClick()
+                return true
             }
         }
-        if (best != null) {
-            onEventTap?.invoke(best)
+        var best: NightSegment? = null
+        var bestDist = Float.MAX_VALUE
+        for ((r, seg) in segmentHits) {
+            val cx = (r.left + r.right) / 2f
+            val d = abs(cx - x)
+            if (d < bestDist) {
+                bestDist = d
+                best = seg
+            }
+        }
+        if (best != null && bestDist < width * 0.25f) {
+            onSegmentTap?.invoke(best)
             performClick()
             return true
         }

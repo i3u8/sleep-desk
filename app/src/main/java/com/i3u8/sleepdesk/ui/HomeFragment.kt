@@ -27,7 +27,6 @@ import com.i3u8.sleepdesk.R
 import com.i3u8.sleepdesk.SleepTrackingService
 import com.i3u8.sleepdesk.audio.NightEventType
 import com.i3u8.sleepdesk.data.SessionStore
-import com.i3u8.sleepdesk.data.SleepEvent
 import com.i3u8.sleepdesk.data.SleepSession
 import java.util.concurrent.TimeUnit
 
@@ -156,7 +155,7 @@ class HomeFragment : Fragment() {
             rowLastActions.visibility = View.GONE
             lastFinishedId = null
             bindStats(current!!)
-            bindEvents(current.events, getString(R.string.events_tonight))
+            bindSegments(current, getString(R.string.segments_tonight))
         } else {
             btnToggle.text = getString(R.string.btn_start)
             btnToggle.backgroundTintList = ContextCompat.getColorStateList(requireContext(), R.color.start_green)
@@ -167,7 +166,7 @@ class HomeFragment : Fragment() {
                 lastFinishedId = last.id
                 rowLastActions.visibility = View.VISIBLE
                 bindStats(last)
-                bindEvents(last.events, getString(R.string.events_last))
+                bindSegments(last, getString(R.string.segments_last))
             } else {
                 lastFinishedId = null
                 rowLastActions.visibility = View.GONE
@@ -201,30 +200,37 @@ class HomeFragment : Fragment() {
     private fun bindStats(s: SleepSession) {
         cardStats.visibility = View.VISIBLE
         tvStatDuration.text = formatDuration(s.durationMs())
-        tvStatSnore.text = s.countByType(NightEventType.SNORE).toString()
+        val segs = s.ensureSegments()
+        // Prefer segment counts for snore; keep wake as event proxy
+        val snoreSegs = segs.count { it.primaryLabel == NightEventType.SNORE.name }
+        tvStatSnore.text = if (snoreSegs > 0) snoreSegs.toString() else s.countByType(NightEventType.SNORE).toString()
         tvStatWake.text = (
             s.countByType(NightEventType.NIGHT_WAKE_SOUND) +
                 s.countByType(NightEventType.COUGH)
             ).toString()
-        tvStatClips.text = s.clipCount().toString()
+        tvStatClips.text = segs.sumOf { it.representativeClipPaths.size }.coerceAtLeast(0).toString()
+            .let { n ->
+                // Fall back to total clips if no segments yet
+                if (segs.isEmpty()) s.clipCount().toString() else n
+            }
     }
 
-    private fun bindEvents(events: List<SleepEvent>, title: String) {
+    private fun bindSegments(session: SleepSession, title: String) {
         tvEventsTitle.visibility = View.VISIBLE
         tvEventsTitle.text = title
-        val sorted = events.sortedByDescending { it.timeMs }
-        if (sorted.isEmpty()) {
+        val segments = session.ensureSegments().sortedByDescending { it.startMs }
+        if (segments.isEmpty()) {
             rvEvents.visibility = View.GONE
             tvEventsEmpty.visibility = View.VISIBLE
-            tvEventsEmpty.text = getString(R.string.events_empty)
+            tvEventsEmpty.text = getString(R.string.segments_empty)
         } else {
             tvEventsEmpty.visibility = View.GONE
             rvEvents.visibility = View.VISIBLE
-            rvEvents.adapter = EventsAdapter(sorted) { e ->
-                (parentFragmentManager.findFragmentByTag(EventDetailBottomSheet.TAG) as? EventDetailBottomSheet)
+            rvEvents.adapter = SegmentsAdapter(segments) { seg ->
+                (parentFragmentManager.findFragmentByTag(SegmentDetailBottomSheet.TAG) as? SegmentDetailBottomSheet)
                     ?.dismissAllowingStateLoss()
-                EventDetailBottomSheet.newInstance(e)
-                    .show(parentFragmentManager, EventDetailBottomSheet.TAG)
+                SegmentDetailBottomSheet.newInstance(session.id, seg.id)
+                    .show(parentFragmentManager, SegmentDetailBottomSheet.TAG)
             }
         }
     }

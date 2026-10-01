@@ -2,43 +2,37 @@
 
 Android sleep tracker — **microphone ambient monitoring** (no bedside placement required), one-tap start/stop, local-only.
 
-**Package:** `com.i3u8.sleepdesk` · **v0.2.4** · MIT
+**Package:** `com.i3u8.sleepdesk` · **v0.3.0** · MIT
+
+## What’s new in v0.3.0 — 段式夜晚
+
+- **Segment bands**: night split into density-aware bouts (same-type merge → split if >20 min → MIXED merge); timeline colored by segments
+- **Representative clips**: 0–2 AAC paths per segment (up to 3 for long snore ≥10 min); strategy A — reference only, never delete clip files
+- **Collapsed events**: Home / session detail primary list = segments; tap segment → summary + play clips; fine-grained events behind expand
+- **Honesty**: UI marks 估算/实验性; not a hypnogram / deep-sleep / medical staging — see [`docs/sleep-sounds-and-cycles.md`](docs/sleep-sounds-and-cycles.md)
+- Spec: [`docs/segments.md`](docs/segments.md) · detection layer unchanged ([`docs/audio-algo.md`](docs/audio-algo.md))
 
 ## What’s new in v0.2.4
 
-- **Delete data**: delete one night (Home / History / session detail) + **清空全部** with double confirm; cascades `audio_clips`
-- **Full-night timeline** in session detail: colored event markers, interrupt ticks (screen/charge), tap to replay
-- **Acoustic activity band** labeled「夜间声音与体动活跃度（非睡眠分期）」
-- **Experimental cycle band** (toggle): wake-ish / quieter-NREM-ish / rem-ish heuristic — marked 实验性/非医疗, not a hypnogram
-- Includes [`docs/sleep-sounds-and-cycles.md`](docs/sleep-sounds-and-cycles.md)
-
-## What’s new in v0.2.2
-
-- **Higher sensitivity** (default): lower relative energy margin, shorter candidate gate, relaxed `RuleClassifier` — fewer misses, more false positives OK
-- **Far desk**: try `UNPROCESSED`, auto-fallback to `MIC` if idle gain too low; longer EMA + p15 noise floor — see [`docs/audio-algo.md`](docs/audio-algo.md) §2.4
-- **Live feedback**: on each event, home shows Snackbar「检测到：…」and refreshes the event list immediately (not only after stop)
-- Includes v0.2.1: **tap-to-replay** AAC clips + **Material 3** UI polish
+- **Delete data**: delete one night + **清空全部** with double confirm; cascades `audio_clips`
+- **Full-night timeline** + acoustic activity band + experimental cycle band (superseded by segments in 0.3)
 
 ## What’s in v0.2
 
 - **Primary signal = microphone** via foreground service (`FOREGROUND_SERVICE_MICROPHONE`)
-- Continuous low-cost energy / VAD-style gate → rule classifier (`SNORE` / `COUGH` / `SPEECH` / `NIGHT_WAKE_SOUND` / …)
-- **Short AAC clips only** on key events (~1.5 s pre/post, max 8 s) — **never** full-night WAV
-- Two bottom tabs: **首页** (today) · **历史** (duration bars + night list)
-- Secondary signals (no mattress needed): screen on/off, charging, optional light sensor
-- Accel-as-primary from v0.1 removed
+- Continuous energy gate → rule classifier → **short AAC clips only** on key events
+- Two bottom tabs: **首页** · **历史**
+- Secondary signals: screen / charge / light
 - Pluggable `NightAudioEngine` — see [`docs/audio-algo.md`](docs/audio-algo.md)
 
 ## How to use
 
-1. Phone can stay on the nightstand / charger — **not** on the mattress.
+1. Phone can stay on the nightstand — **not** on the mattress.
 2. Tap **开始睡** → grant **microphone** (and notifications on Android 13+).
-3. Leave the app; ongoing notification keeps ambient monitoring. When an event fires, the home tab shows a short「检测到」toast and inserts the row live.
-4. Morning: tap **结束** → tonight stats + event list; tap an event to replay its clip. Past nights on 历史 (tap a card → event list).
+3. Leave the app; live Snackbar「检测到：…」on events.
+4. Morning: **结束** → segment list + timeline; tap a segment to hear representative clips.
 
 ## Build
-
-Requirements: JDK 17+ (21 OK), Android SDK platform 34 + build-tools 34.
 
 ```bash
 echo "sdk.dir=/path/to/Android/Sdk" > local.properties
@@ -46,36 +40,24 @@ echo "sdk.dir=/path/to/Android/Sdk" > local.properties
 # APK: app/build/outputs/apk/debug/app-debug.apk
 ```
 
-## Permissions
-
-| Permission | When |
-| --- | --- |
-| `RECORD_AUDIO` | Requested when user taps 开始睡 |
-| `FOREGROUND_SERVICE` + `FOREGROUND_SERVICE_MICROPHONE` | Ambient mic FGS |
-| `POST_NOTIFICATIONS` | Ongoing tracking notification (API 33+) |
-| `WAKE_LOCK` | Keep sampling while screen off |
-
 ## Architecture
 
 ```
 MainActivity (BottomNav: 首页 / 历史)
-  ├─ HomeFragment — big sleep button, tonight stats, live Snackbar + tappable events
-  └─ HistoryFragment — Canvas duration bars + session cards → event list
+  ├─ HomeFragment — sleep button, stats, segment list, live Snackbar
+  └─ HistoryFragment — duration bars + session cards → segment timeline
 
-EventDetailBottomSheet — type / time / Play-Pause via ClipPlayer (MediaPlayer)
-SessionDetailBottomSheet — full-night timeline + events + delete
+SegmentDetailBottomSheet — summary + representative clips + expand events
+SessionDetailBottomSheet — segment timeline + segment list + collapsed events
 
 SleepTrackingService (FGS microphone)
-  ├─ NightAudioEngineImpl  ← docs/audio-algo.md (high-sens + MIC fallback)
-  │    AudioRecord 16 kHz mono → relative energy gate → candidates
-  │    → RuleClassifier → NightEvent → AAC clip (AudioClipStore)
-  └─ SecondarySignals (screen / charge / light)
+  ├─ NightAudioEngineImpl  ← docs/audio-algo.md
+  └─ SecondarySignals
 
-SessionStore — sessions.json (history + audioEvents index + clip paths)
-audio_clips/{sessionId}/*.m4a — private app storage only
+SegmentBuilder (docs/segments.md) — bout merge → NightSegment[] + clip quota
+SessionStore — sessions.json (events + materialized segments at stop)
+audio_clips/{sessionId}/*.m4a
 ```
-
-Swap the algorithm by implementing `NightAudioEngine` / replacing `NightAudioEngineImpl` wiring in the service.
 
 ## License
 

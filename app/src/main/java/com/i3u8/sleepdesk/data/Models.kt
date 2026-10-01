@@ -5,6 +5,7 @@ import com.i3u8.sleepdesk.audio.NightEventType
 
 /**
  * Session + indexed night events (clip paths only — no full-night audio).
+ * Segments are a view/index over events (docs/segments.md); detection layer unchanged.
  */
 data class SleepEvent(
     val id: String,
@@ -30,7 +31,6 @@ data class SleepEvent(
             algoVersion = e.algoVersion
         )
 
-        // Secondary (non-audio) types
         const val TYPE_SCREEN_ON = "SCREEN_ON"
         const val TYPE_SCREEN_OFF = "SCREEN_OFF"
         const val TYPE_CHARGING_ON = "CHARGING_ON"
@@ -43,7 +43,9 @@ data class SleepSession(
     val id: String,
     val startMs: Long,
     var endMs: Long? = null,
-    val events: MutableList<SleepEvent> = mutableListOf()
+    val events: MutableList<SleepEvent> = mutableListOf(),
+    /** Materialized at session end; may be empty for running / legacy sessions. */
+    var segments: MutableList<NightSegment> = mutableListOf()
 ) {
     val isRunning: Boolean get() = endMs == null
 
@@ -65,4 +67,27 @@ data class SleepSession(
     fun snoreCount(): Int = countByType(NightEventType.SNORE)
     fun coughCount(): Int = countByType(NightEventType.COUGH)
     fun wakeSoundCount(): Int = countByType(NightEventType.NIGHT_WAKE_SOUND)
+
+    fun segmentCount(): Int = ensureSegments().size
+
+    fun snoreSegmentCount(): Int =
+        ensureSegments().count { it.primaryLabel == NightEventType.SNORE.name }
+
+    /**
+     * Prefer persisted segments; rebuild from events if missing (legacy / in-progress).
+     */
+    fun ensureSegments(config: SegmentConfig = SegmentConfig()): List<NightSegment> {
+        if (segments.isNotEmpty()) return segments
+        val built = SegmentBuilder.build(this, config)
+        segments.clear()
+        segments.addAll(built)
+        return segments
+    }
+
+    fun materializeSegments(config: SegmentConfig = SegmentConfig()): List<NightSegment> {
+        val built = SegmentBuilder.build(this, config)
+        segments.clear()
+        segments.addAll(built)
+        return segments
+    }
 }

@@ -168,15 +168,16 @@ class HistoryFragment : Fragment() {
                 fmt.format(Date(s.startMs)),
                 end
             )
+            val segs = s.ensureSegments()
             holder.detail.text = ctx.getString(
-                R.string.history_item_detail,
+                R.string.history_item_detail_v03,
                 h, m,
+                segs.size,
                 s.audioEventCount(),
                 s.clipCount(),
-                s.countByType(NightEventType.SNORE),
-                s.countByType(NightEventType.COUGH) + s.countByType(NightEventType.NIGHT_WAKE_SOUND)
+                s.countByType(NightEventType.SNORE)
             )
-            holder.badge.text = ctx.getString(R.string.history_tap_events, s.events.size)
+            holder.badge.text = ctx.getString(R.string.history_tap_segments, segs.size)
             holder.itemView.setOnClickListener { onClick(s) }
             holder.itemView.setOnLongClickListener { onLongClick(s) }
         }

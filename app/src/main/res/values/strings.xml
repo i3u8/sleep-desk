@@ -77,4 +77,42 @@
     <string name="action_delete">删除</string>
     <string name="action_clear">清空</string>
     <string name="open_last_detail">查看上次整夜时间轴</string>
+
+    <!-- v0.3.0 segmented night -->
+    <string name="segment_snore">鼾声段</string>
+    <string name="segment_wake_cough">夜醒/咳嗽</string>
+    <string name="segment_speech">说话</string>
+    <string name="segment_abnormal">异常</string>
+    <string name="segment_mixed">混合</string>
+    <string name="segment_short_snore">鼾</string>
+    <string name="segment_short_cough">咳</string>
+    <string name="segment_short_speech">说话</string>
+    <string name="segment_short_wake">夜醒</string>
+    <string name="segment_short_abnormal">异常</string>
+    <string name="segment_count_part">%1$d 次%2$s</string>
+    <string name="segment_subtitle">%1$s · %2$d clips</string>
+    <string name="segment_no_events">无事件</string>
+    <string name="segment_item_time">%1$s → %2$s · %3$d 分</string>
+    <string name="segment_estimate_badge">估算 / 实验性 · 非医疗分期</string>
+    <string name="segment_detail_time">%1$s → %2$s · 约 %3$d 分钟</string>
+    <string name="segment_clips_title">代表片段</string>
+    <string name="segment_no_clips">本段无代表音频片段</string>
+    <string name="segment_play_clip">播放代表 %1$d · %2$s · %3$s</string>
+    <string name="segment_expand_events">展开全部事件（%1$d）</string>
+    <string name="segment_collapse_events">收起事件列表</string>
+    <string name="segments_list_title">夜间段（估算）</string>
+    <string name="segments_empty">暂无成段事件（安静夜或仅有辅信号）</string>
+    <string name="segments_tonight">今夜段</string>
+    <string name="segments_last">上次段</string>
+    <string name="session_expand_events">展开全部细粒度事件（%1$d）</string>
+    <string name="session_collapse_events">收起细粒度事件</string>
+    <string name="session_detail_sub_v03">时长 %1$d h %2$d m · 段 %3$d · 事件 %4$d · 片段 %5$d</string>
+    <string name="timeline_segment_label">段式夜晚 · 声学事件聚合（非睡眠分期）</string>
+    <string name="timeline_segment_disclaimer">估算 / 实验性 / 非医疗：段标签来自声音事件密度与类型，不是脑电 hypnogram，也不输出「深睡/REM 分钟数」。</string>
+    <string name="timeline_legend_v03">色带=夜间段（可点）· 白点=代表 clip · 黄竖线=亮屏/充电打断 · 蓝条=声学活跃度</string>
+    <string name="stat_segments">段</string>
+    <string name="home_segments_hint">主列表为段；点段可听代表片段。细粒度事件已收起。</string>
+
+    <string name="history_item_detail_v03">时长 %1$d h %2$d m · 段 %3$d · 事件 %4$d · 片段 %5$d · 鼾 %6$d</string>
+    <string name="history_tap_segments">查看段式时间轴 · %1$d 段 ›</string>
 </resources>

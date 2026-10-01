@@ -62,7 +62,6 @@
                 android:textAllCaps="false" />
         </LinearLayout>
 
-        <!-- Full-night timeline -->
         <TextView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
@@ -76,26 +75,16 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="4dp"
-            android:text="@string/timeline_activity_label"
+            android:text="@string/timeline_segment_label"
             android:textAppearance="?attr/textAppearanceLabelSmall"
             android:textColor="@color/muted" />
-
-        <com.google.android.material.materialswitch.MaterialSwitch
-            android:id="@+id/switchCycles"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="6dp"
-            android:checked="true"
-            android:text="@string/timeline_cycle_toggle"
-            android:textAppearance="?attr/textAppearanceBodySmall"
-            android:textColor="@color/on_bg" />
 
         <TextView
             android:id="@+id/tvCycleDisclaimer"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="2dp"
-            android:text="@string/timeline_cycle_disclaimer"
+            android:layout_marginTop="4dp"
+            android:text="@string/timeline_segment_disclaimer"
             android:textAppearance="?attr/textAppearanceLabelSmall"
             android:textColor="@color/warning"
             android:lineSpacingExtra="2dp" />
@@ -113,7 +102,7 @@
             <com.i3u8.sleepdesk.ui.NightTimelineView
                 android:id="@+id/nightTimeline"
                 android:layout_width="match_parent"
-                android:layout_height="168dp"
+                android:layout_height="148dp"
                 android:padding="4dp" />
         </com.google.android.material.card.MaterialCardView>
 
@@ -121,7 +110,7 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="6dp"
-            android:text="@string/timeline_legend"
+            android:text="@string/timeline_legend_v03"
             android:textAppearance="?attr/textAppearanceLabelSmall"
             android:textColor="@color/muted"
             android:lineSpacingExtra="2dp" />
@@ -130,9 +119,36 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="16dp"
-            android:text="@string/timeline_events_list"
+            android:text="@string/segments_list_title"
             android:textAppearance="?attr/textAppearanceTitleSmall"
             android:textColor="@color/on_bg" />
+
+        <TextView
+            android:id="@+id/tvSessionSegmentsEmpty"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="@string/segments_empty"
+            android:textColor="@color/muted"
+            android:padding="24dp"
+            android:gravity="center"
+            android:visibility="gone" />
+
+        <androidx.recyclerview.widget.RecyclerView
+            android:id="@+id/rvSessionSegments"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:nestedScrollingEnabled="false"
+            android:overScrollMode="never" />
+
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/btnExpandAllEvents"
+            style="@style/Widget.Material3.Button.TextButton"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:text="@string/session_expand_events"
+            android:textAllCaps="false"
+            android:textColor="@color/accent" />
 
         <TextView
             android:id="@+id/tvSessionEventsEmpty"
@@ -140,7 +156,7 @@
             android:layout_height="wrap_content"
             android:text="@string/events_empty"
             android:textColor="@color/muted"
-            android:padding="24dp"
+            android:padding="16dp"
             android:gravity="center"
             android:visibility="gone" />
 
@@ -149,6 +165,7 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:nestedScrollingEnabled="false"
-            android:overScrollMode="never" />
+            android:overScrollMode="never"
+            android:visibility="gone" />
     </LinearLayout>
 </androidx.core.widget.NestedScrollView>

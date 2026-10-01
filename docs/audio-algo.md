@@ -4,6 +4,7 @@
 > **对接面**：挂在现有 `SleepTrackingService`（前台服务）生命周期上，与 `SessionStore` 会话一并启停。  
 > **版本策略**：先规则/轻量特征可上线（v1），Tiny TFLite 分类留作二期。  
 > **实测对策（2026-10）**：用户反馈「漏检偏多；手机离床远时几乎听不到」→ **默认切远场/高灵敏度**（见 §2.4）。主应用请把 `SleepTrackingService` 里 `audioEngine.start(session.id, AudioAlgoConfig())` 换成 **`AudioAlgoConfig.farField()`**（或把 data class 默认值直接改为远场档）。
+> **段式展示 / 聚合**：见 [`docs/segments.md`](segments.md)（检测层仍产出细粒度事件；UI/统计用 Segment + 代表 clip 配额）。
 
 ---
 

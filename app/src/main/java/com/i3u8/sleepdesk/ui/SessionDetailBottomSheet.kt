@@ -11,7 +11,6 @@ import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import com.google.android.material.bottomsheet.BottomSheetDialogFragment
 import com.google.android.material.button.MaterialButton
-import com.google.android.material.materialswitch.MaterialSwitch
 import com.i3u8.sleepdesk.R
 import com.i3u8.sleepdesk.data.SessionStore
 import com.i3u8.sleepdesk.data.SleepSession
@@ -24,6 +23,7 @@ class SessionDetailBottomSheet : BottomSheetDialogFragment() {
 
     private var sessionId: String? = null
     private var deleted = false
+    private var eventsExpanded = false
 
     override fun onCreateView(inflater: LayoutInflater, container: ViewGroup?, savedInstanceState: Bundle?): View {
         return inflater.inflate(R.layout.bottom_sheet_session_detail, container, false)
@@ -39,48 +39,71 @@ class SessionDetailBottomSheet : BottomSheetDialogFragment() {
         bindHeader(view, session)
 
         val timeline = view.findViewById<NightTimelineView>(R.id.nightTimeline)
-        val switchCycles = view.findViewById<MaterialSwitch>(R.id.switchCycles)
-        val disclaimer = view.findViewById<TextView>(R.id.tvCycleDisclaimer)
-        val isRunning = session.isRunning
+        val segments = session.ensureSegments()
 
-        timeline.setSession(session, showExperimentalCycles = switchCycles.isChecked) { e ->
-            (parentFragmentManager.findFragmentByTag(EventDetailBottomSheet.TAG) as? EventDetailBottomSheet)
-                ?.dismissAllowingStateLoss()
-            EventDetailBottomSheet.newInstance(e)
-                .show(parentFragmentManager, EventDetailBottomSheet.TAG)
+        timeline.setSession(session, showActivityRibbon = true) { seg ->
+            openSegment(session.id, seg.id)
         }
-        switchCycles.setOnCheckedChangeListener { _, checked ->
-            disclaimer.visibility = if (checked) View.VISIBLE else View.GONE
-            timeline.setShowCycles(checked)
-            timeline.requestLayout()
+
+        val rvSeg = view.findViewById<RecyclerView>(R.id.rvSessionSegments)
+        val emptySeg = view.findViewById<TextView>(R.id.tvSessionSegmentsEmpty)
+        if (segments.isEmpty()) {
+            emptySeg.visibility = View.VISIBLE
+            rvSeg.visibility = View.GONE
+        } else {
+            emptySeg.visibility = View.GONE
+            rvSeg.visibility = View.VISIBLE
+            rvSeg.layoutManager = LinearLayoutManager(requireContext())
+            rvSeg.adapter = SegmentsAdapter(segments) { seg ->
+                openSegment(session.id, seg.id)
+            }
         }
-        disclaimer.visibility = if (switchCycles.isChecked) View.VISIBLE else View.GONE
 
         val btnDelete = view.findViewById<MaterialButton>(R.id.btnDeleteSession)
-        if (isRunning) {
+        if (session.isRunning) {
             btnDelete.visibility = View.GONE
         } else {
             btnDelete.visibility = View.VISIBLE
             btnDelete.setOnClickListener { confirmDelete(store, session) }
         }
 
-        val rv = view.findViewById<RecyclerView>(R.id.rvSessionEvents)
-        val empty = view.findViewById<TextView>(R.id.tvSessionEventsEmpty)
-        val events = session.events.sortedByDescending { it.timeMs }
-        if (events.isEmpty()) {
-            empty.visibility = View.VISIBLE
-            rv.visibility = View.GONE
-        } else {
-            empty.visibility = View.GONE
-            rv.visibility = View.VISIBLE
-            rv.layoutManager = LinearLayoutManager(requireContext())
-            rv.adapter = EventsAdapter(events) { e ->
-                (parentFragmentManager.findFragmentByTag(EventDetailBottomSheet.TAG) as? EventDetailBottomSheet)
-                    ?.dismissAllowingStateLoss()
-                EventDetailBottomSheet.newInstance(e)
-                    .show(parentFragmentManager, EventDetailBottomSheet.TAG)
+        // Collapsed raw events
+        val btnExpand = view.findViewById<MaterialButton>(R.id.btnExpandAllEvents)
+        val rvEvents = view.findViewById<RecyclerView>(R.id.rvSessionEvents)
+        val emptyEvents = view.findViewById<TextView>(R.id.tvSessionEventsEmpty)
+        emptyEvents.visibility = View.GONE
+        rvEvents.visibility = View.GONE
+        val allEvents = session.events.sortedByDescending { it.timeMs }
+        btnExpand.text = getString(R.string.session_expand_events, allEvents.size)
+        btnExpand.setOnClickListener {
+            eventsExpanded = !eventsExpanded
+            if (eventsExpanded) {
+                if (allEvents.isEmpty()) {
+                    emptyEvents.visibility = View.VISIBLE
+                    rvEvents.visibility = View.GONE
+                } else {
+                    emptyEvents.visibility = View.GONE
+                    rvEvents.visibility = View.VISIBLE
+                    rvEvents.layoutManager = LinearLayoutManager(requireContext())
+                    rvEvents.adapter = EventsAdapter(allEvents) { e ->
+                        EventDetailBottomSheet.newInstance(e)
+                            .show(parentFragmentManager, EventDetailBottomSheet.TAG)
+                    }
+                }
+                btnExpand.text = getString(R.string.session_collapse_events)
+            } else {
+                emptyEvents.visibility = View.GONE
+                rvEvents.visibility = View.GONE
+                btnExpand.text = getString(R.string.session_expand_events, allEvents.size)
             }
         }
+    }
+
+    private fun openSegment(sessionId: String, segmentId: String) {
+        (parentFragmentManager.findFragmentByTag(SegmentDetailBottomSheet.TAG) as? SegmentDetailBottomSheet)
+            ?.dismissAllowingStateLoss()
+        SegmentDetailBottomSheet.newInstance(sessionId, segmentId)
+            .show(parentFragmentManager, SegmentDetailBottomSheet.TAG)
     }
 
     private fun confirmDelete(store: SessionStore, session: SleepSession) {
@@ -110,11 +133,13 @@ class SessionDetailBottomSheet : BottomSheetDialogFragment() {
         val end = s.endMs?.let { fmt.format(Date(it)) } ?: "…"
         val h = TimeUnit.MILLISECONDS.toHours(s.durationMs())
         val m = TimeUnit.MILLISECONDS.toMinutes(s.durationMs()) % 60
+        val segs = s.ensureSegments()
         view.findViewById<TextView>(R.id.tvSessionTitle).text =
             getString(R.string.history_item_title, fmt.format(Date(s.startMs)), end)
         view.findViewById<TextView>(R.id.tvSessionSubtitle).text = getString(
-            R.string.session_detail_sub,
+            R.string.session_detail_sub_v03,
             h, m,
+            segs.size,
             s.audioEventCount(),
             s.clipCount()
         )
