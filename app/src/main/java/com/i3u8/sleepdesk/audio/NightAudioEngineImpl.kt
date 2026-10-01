@@ -8,6 +8,8 @@ import android.util.Log
 import java.util.ArrayDeque
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicBoolean
+import kotlin.math.pow
+import kotlin.math.tanh
 
 /**
  * Doc-aligned night ambient engine: relative energy gate → candidate → rule classify → AAC clip.
@@ -29,7 +31,7 @@ class NightAudioEngineImpl(
     @Volatile private var lastScreenChangeMs = 0L
 
     private val floorWindow = ArrayDeque<Float>()
-    private var noiseFloor = -50f
+    private var noiseFloor = -58f
     private var smoothedDb = -60f
 
     private var inCandidate = false
@@ -63,7 +65,7 @@ class NightAudioEngineImpl(
         this.sessionStartMs = System.currentTimeMillis()
         ring = PcmRingBuffer(config.sampleRate * 6)
         floorWindow.clear()
-        noiseFloor = -50f
+        noiseFloor = -58f
         smoothedDb = -60f
         inCandidate = false
         overCount = 0
@@ -185,6 +187,7 @@ class NightAudioEngineImpl(
     }
 
     private fun processHop(frame: ShortArray, count: Int) {
+        applyDigitalGain(frame, count, config.digitalGainDb)
         val before = ring.totalSamples()
         ring.write(frame, 0, count)
         val hopStartSample = before
@@ -234,6 +237,20 @@ class NightAudioEngineImpl(
                 overCount = 0
                 underCount = 0
             }
+        }
+    }
+
+    /** Apply fixed software gain while softly saturating peaks; no system AGC is enabled. */
+    private fun applyDigitalGain(frame: ShortArray, count: Int, gainDb: Float) {
+        if (count <= 0 || gainDb == 0f) return
+        val linearGain = 10.0.pow((gainDb / 20.0).toDouble()).toFloat()
+        if (!linearGain.isFinite() || linearGain <= 0f) return
+        val tanhGain = tanh(linearGain.toDouble()).toFloat().coerceAtLeast(1e-6f)
+        for (i in 0 until count) {
+            val normalized = frame[i] / 32768f
+            val gained = normalized * linearGain
+            val saturated = tanh(gained.toDouble()).toFloat() / tanhGain
+            frame[i] = (saturated.coerceIn(-1f, 1f) * 32767f).toInt().toShort()
         }
     }
 
@@ -313,7 +330,7 @@ class NightAudioEngineImpl(
             confidence = conf,
             clipRelativePath = clipPath,
             features = feats.toMap(),
-            algoVersion = "audio-v1.1"
+            algoVersion = "audio-v1.2"
         )
         listener?.onEvent(event)
     }

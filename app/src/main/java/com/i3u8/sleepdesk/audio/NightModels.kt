@@ -12,7 +12,7 @@ data class NightEvent(
     val confidence: Float,
     val clipRelativePath: String? = null,
     val features: Map<String, Float> = emptyMap(),
-    val algoVersion: String = "audio-v1.1"
+    val algoVersion: String = "audio-v1.2"
 )
 
 /**
@@ -27,8 +27,8 @@ data class AudioAlgoConfig(
     val marginDb: Float = 6f,
     /** >1.0 = more sensitive (lower effective margin). Default high. */
     val sensitivity: Float = 1.25f,
-    val preRollMs: Int = 1_500,
-    val postRollMs: Int = 1_500,
+    val preRollMs: Int = 2_000,
+    val postRollMs: Int = 2_000,
     val maxClipMs: Int = 8_000,
     val minCandidateMs: Int = 150,
     val maxCandidateMs: Int = 8_000,
@@ -45,10 +45,17 @@ data class AudioAlgoConfig(
     val floorWindowMs: Int = 60_000,
     val floorPercentile: Float = 0.15f,
     val confidenceFloor: Float = 0.42f,
+    /** Fixed software gain applied before energy/features/clip encoding; system AGC remains unchanged. */
+    val digitalGainDb: Float = 6f,
     val aacBitrate: Int = 40_000,
     val sessionWarmupMs: Long = 12_000L
 ) {
     fun effectiveMarginDb(): Float = (marginDb / sensitivity.coerceAtLeast(0.5f)).coerceIn(3f, 18f)
+
+    companion object {
+        /** Far-field/high-sensitivity preset used by the v0.2.3 follow-up. */
+        fun farField() = AudioAlgoConfig()
+    }
 }
 
 interface NightAudioListener {
