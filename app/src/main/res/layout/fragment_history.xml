@@ -10,14 +10,31 @@
     android:paddingBottom="8dp"
     android:background="@color/bg">
 
-    <TextView
+    <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:text="@string/tab_history"
-        android:textAppearance="?attr/textAppearanceHeadlineMedium"
-        android:textColor="@color/on_bg"
-        android:textStyle="bold"
-        android:paddingBottom="12dp" />
+        android:orientation="horizontal"
+        android:gravity="center_vertical"
+        android:paddingBottom="12dp">
+
+        <TextView
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="@string/tab_history"
+            android:textAppearance="?attr/textAppearanceHeadlineMedium"
+            android:textColor="@color/on_bg"
+            android:textStyle="bold" />
+
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/btnClearAll"
+            style="@style/Widget.Material3.Button.TextButton"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="@string/btn_clear_all"
+            android:textColor="@color/stop_red"
+            android:textAllCaps="false" />
+    </LinearLayout>
 
     <com.google.android.material.card.MaterialCardView
         android:layout_width="match_parent"
@@ -60,6 +77,14 @@
         android:gravity="center"
         android:padding="32dp"
         android:visibility="gone" />
+
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="@string/history_long_press_hint"
+        android:textAppearance="?attr/textAppearanceLabelSmall"
+        android:textColor="@color/muted"
+        android:paddingBottom="6dp" />
 
     <androidx.recyclerview.widget.RecyclerView
         android:id="@+id/rvHistory"

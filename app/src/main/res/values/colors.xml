@@ -16,4 +16,6 @@
     <color name="nav_indicator">#337C9CFF</color>
     <color name="ic_launcher_bg">#FF152036</color>
     <color name="bar_fill">#FF4ADE80</color>
+    <color name="timeline_activity">#FF38BDF8</color>
+    <color name="timeline_interrupt">#FFFBBF24</color>
 </resources>

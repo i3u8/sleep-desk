@@ -5,9 +5,13 @@ import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
 import android.widget.TextView
+import android.widget.Toast
+import androidx.appcompat.app.AlertDialog
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import com.google.android.material.bottomsheet.BottomSheetDialogFragment
+import com.google.android.material.button.MaterialButton
+import com.google.android.material.materialswitch.MaterialSwitch
 import com.i3u8.sleepdesk.R
 import com.i3u8.sleepdesk.data.SessionStore
 import com.i3u8.sleepdesk.data.SleepSession
@@ -18,18 +22,47 @@ import java.util.concurrent.TimeUnit
 
 class SessionDetailBottomSheet : BottomSheetDialogFragment() {
 
+    private var sessionId: String? = null
+    private var deleted = false
+
     override fun onCreateView(inflater: LayoutInflater, container: ViewGroup?, savedInstanceState: Bundle?): View {
         return inflater.inflate(R.layout.bottom_sheet_session_detail, container, false)
     }
 
     override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
-        val sessionId = requireArguments().getString(ARG_ID) ?: return
+        sessionId = requireArguments().getString(ARG_ID) ?: return
         val store = SessionStore(requireContext())
         val session = store.loadCurrent()?.takeIf { it.id == sessionId }
             ?: store.loadHistory().firstOrNull { it.id == sessionId }
             ?: return
 
         bindHeader(view, session)
+
+        val timeline = view.findViewById<NightTimelineView>(R.id.nightTimeline)
+        val switchCycles = view.findViewById<MaterialSwitch>(R.id.switchCycles)
+        val disclaimer = view.findViewById<TextView>(R.id.tvCycleDisclaimer)
+        val isRunning = session.isRunning
+
+        timeline.setSession(session, showExperimentalCycles = switchCycles.isChecked) { e ->
+            (parentFragmentManager.findFragmentByTag(EventDetailBottomSheet.TAG) as? EventDetailBottomSheet)
+                ?.dismissAllowingStateLoss()
+            EventDetailBottomSheet.newInstance(e)
+                .show(parentFragmentManager, EventDetailBottomSheet.TAG)
+        }
+        switchCycles.setOnCheckedChangeListener { _, checked ->
+            disclaimer.visibility = if (checked) View.VISIBLE else View.GONE
+            timeline.setShowCycles(checked)
+            timeline.requestLayout()
+        }
+        disclaimer.visibility = if (switchCycles.isChecked) View.VISIBLE else View.GONE
+
+        val btnDelete = view.findViewById<MaterialButton>(R.id.btnDeleteSession)
+        if (isRunning) {
+            btnDelete.visibility = View.GONE
+        } else {
+            btnDelete.visibility = View.VISIBLE
+            btnDelete.setOnClickListener { confirmDelete(store, session) }
+        }
 
         val rv = view.findViewById<RecyclerView>(R.id.rvSessionEvents)
         val empty = view.findViewById<TextView>(R.id.tvSessionEventsEmpty)
@@ -42,13 +75,34 @@ class SessionDetailBottomSheet : BottomSheetDialogFragment() {
             rv.visibility = View.VISIBLE
             rv.layoutManager = LinearLayoutManager(requireContext())
             rv.adapter = EventsAdapter(events) { e ->
-                // Stop any prior detail sheet play by dismissing via new sheet; only one EventDetail at a time
                 (parentFragmentManager.findFragmentByTag(EventDetailBottomSheet.TAG) as? EventDetailBottomSheet)
                     ?.dismissAllowingStateLoss()
                 EventDetailBottomSheet.newInstance(e)
                     .show(parentFragmentManager, EventDetailBottomSheet.TAG)
             }
         }
+    }
+
+    private fun confirmDelete(store: SessionStore, session: SleepSession) {
+        AlertDialog.Builder(requireContext())
+            .setTitle(R.string.delete_confirm_title)
+            .setMessage(R.string.delete_confirm_msg)
+            .setNegativeButton(R.string.action_cancel, null)
+            .setPositiveButton(R.string.action_delete) { _, _ ->
+                val ok = store.deleteOne(session.id)
+                if (ok) {
+                    deleted = true
+                    Toast.makeText(requireContext(), R.string.delete_done, Toast.LENGTH_SHORT).show()
+                    parentFragmentManager.setFragmentResult(RESULT_KEY, Bundle().apply {
+                        putBoolean(RESULT_DELETED, true)
+                        putString(RESULT_ID, session.id)
+                    })
+                    dismissAllowingStateLoss()
+                } else {
+                    Toast.makeText(requireContext(), R.string.delete_failed, Toast.LENGTH_SHORT).show()
+                }
+            }
+            .show()
     }
 
     private fun bindHeader(view: View, s: SleepSession) {
@@ -69,6 +123,9 @@ class SessionDetailBottomSheet : BottomSheetDialogFragment() {
     companion object {
         private const val ARG_ID = "session_id"
         const val TAG = "SessionDetailBottomSheet"
+        const val RESULT_KEY = "session_detail_result"
+        const val RESULT_DELETED = "deleted"
+        const val RESULT_ID = "id"
 
         fun newInstance(sessionId: String): SessionDetailBottomSheet {
             return SessionDetailBottomSheet().apply {

@@ -11,25 +11,24 @@ import android.os.Bundle
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
+import android.widget.LinearLayout
 import android.widget.TextView
+import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.appcompat.app.AlertDialog
 import androidx.core.content.ContextCompat
 import androidx.fragment.app.Fragment
-import android.widget.Toast
-import com.google.android.material.snackbar.Snackbar
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import com.google.android.material.button.MaterialButton
 import com.google.android.material.card.MaterialCardView
+import com.google.android.material.snackbar.Snackbar
 import com.i3u8.sleepdesk.R
 import com.i3u8.sleepdesk.SleepTrackingService
 import com.i3u8.sleepdesk.audio.NightEventType
 import com.i3u8.sleepdesk.data.SessionStore
 import com.i3u8.sleepdesk.data.SleepEvent
 import com.i3u8.sleepdesk.data.SleepSession
-import java.text.SimpleDateFormat
-import java.util.Date
-import java.util.Locale
 import java.util.concurrent.TimeUnit
 
 class HomeFragment : Fragment() {
@@ -46,7 +45,11 @@ class HomeFragment : Fragment() {
     private lateinit var tvEventsTitle: TextView
     private lateinit var rvEvents: RecyclerView
     private lateinit var tvEventsEmpty: TextView
+    private lateinit var rowLastActions: LinearLayout
+    private lateinit var btnOpenLastDetail: MaterialButton
+    private lateinit var btnDeleteLast: MaterialButton
     private var tracking = false
+    private var lastFinishedId: String? = null
 
     private val permissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
@@ -89,9 +92,32 @@ class HomeFragment : Fragment() {
         tvEventsTitle = view.findViewById(R.id.tvEventsTitle)
         rvEvents = view.findViewById(R.id.rvTonightEvents)
         tvEventsEmpty = view.findViewById(R.id.tvEventsEmpty)
+        rowLastActions = view.findViewById(R.id.rowLastActions)
+        btnOpenLastDetail = view.findViewById(R.id.btnOpenLastDetail)
+        btnDeleteLast = view.findViewById(R.id.btnDeleteLast)
         rvEvents.layoutManager = LinearLayoutManager(requireContext())
         btnToggle.setOnClickListener {
             if (tracking) stopTracking() else maybeStart()
+        }
+        btnOpenLastDetail.setOnClickListener {
+            val id = lastFinishedId ?: return@setOnClickListener
+            (parentFragmentManager.findFragmentByTag(SessionDetailBottomSheet.TAG) as? SessionDetailBottomSheet)
+                ?.dismissAllowingStateLoss()
+            SessionDetailBottomSheet.newInstance(id)
+                .show(parentFragmentManager, SessionDetailBottomSheet.TAG)
+        }
+        btnDeleteLast.setOnClickListener {
+            val id = lastFinishedId ?: return@setOnClickListener
+            confirmDeleteLast(id)
+        }
+
+        parentFragmentManager.setFragmentResultListener(
+            SessionDetailBottomSheet.RESULT_KEY,
+            viewLifecycleOwner
+        ) { _, bundle ->
+            if (bundle.getBoolean(SessionDetailBottomSheet.RESULT_DELETED, false)) {
+                refreshUi()
+            }
         }
     }
 
@@ -127,6 +153,8 @@ class HomeFragment : Fragment() {
             btnToggle.backgroundTintList = ContextCompat.getColorStateList(requireContext(), R.color.stop_red)
             tvStatus.text = getString(R.string.status_tracking)
             tvHint.visibility = View.GONE
+            rowLastActions.visibility = View.GONE
+            lastFinishedId = null
             bindStats(current!!)
             bindEvents(current.events, getString(R.string.events_tonight))
         } else {
@@ -136,9 +164,13 @@ class HomeFragment : Fragment() {
             val last = store.loadLastFinished()
             if (last != null) {
                 tvHint.visibility = View.GONE
+                lastFinishedId = last.id
+                rowLastActions.visibility = View.VISIBLE
                 bindStats(last)
                 bindEvents(last.events, getString(R.string.events_last))
             } else {
+                lastFinishedId = null
+                rowLastActions.visibility = View.GONE
                 cardStats.visibility = View.GONE
                 tvEventsTitle.visibility = View.GONE
                 rvEvents.visibility = View.GONE
@@ -147,6 +179,23 @@ class HomeFragment : Fragment() {
                 tvHint.text = getString(R.string.hint_home)
             }
         }
+    }
+
+    private fun confirmDeleteLast(sessionId: String) {
+        AlertDialog.Builder(requireContext())
+            .setTitle(R.string.delete_confirm_title)
+            .setMessage(R.string.delete_confirm_msg)
+            .setNegativeButton(R.string.action_cancel, null)
+            .setPositiveButton(R.string.action_delete) { _, _ ->
+                val ok = store.deleteOne(sessionId)
+                if (ok) {
+                    Toast.makeText(requireContext(), R.string.delete_done, Toast.LENGTH_SHORT).show()
+                    refreshUi()
+                } else {
+                    Toast.makeText(requireContext(), R.string.delete_failed, Toast.LENGTH_SHORT).show()
+                }
+            }
+            .show()
     }
 
     private fun bindStats(s: SleepSession) {
@@ -179,7 +228,6 @@ class HomeFragment : Fragment() {
             }
         }
     }
-
 
     private fun showLiveEventFeedback(type: String) {
         if (!isAdded || view == null) return

@@ -8,6 +8,9 @@
     <string name="btn_stop">结束</string>
     <string name="btn_play">播放</string>
     <string name="btn_pause">暂停</string>
+    <string name="btn_delete_night">删除本夜</string>
+    <string name="btn_clear_all">清空全部</string>
+    <string name="btn_delete_last">删除上次记录</string>
     <string name="status_idle">准备就绪 · 麦克风监测</string>
     <string name="status_tracking">记录中 · 麦克风监测中…</string>
     <string name="hint_home">手机不必放床上。点大按钮授权麦克风后即可监测环境声；仅在鼾声/突发等事件时保存短片段，不存整夜录音。点事件可回放片段。</string>
@@ -52,6 +55,26 @@
     <string name="history_empty_chart">暂无数据</string>
     <string name="history_item_title">%1$s → %2$s</string>
     <string name="history_item_detail">时长 %1$d h %2$d m · 事件 %3$d · 片段 %4$d · 鼾 %5$d · 咳/突发 %6$d</string>
-    <string name="history_tap_events">查看 %1$d 条事件 ›</string>
+    <string name="history_tap_events">查看时间轴 · %1$d 条事件 ›</string>
+    <string name="history_long_press_hint">点按查看整夜时间轴 · 长按删除单夜</string>
     <string name="session_detail_sub">时长 %1$d h %2$d m · 声学事件 %3$d · 片段 %4$d</string>
+    <string name="timeline_title">整夜时间轴</string>
+    <string name="timeline_activity_label">夜间声音与体动活跃度（非睡眠分期）</string>
+    <string name="timeline_cycle_toggle">实验性周期带（示意）</string>
+    <string name="timeline_cycle_disclaimer">实验性 / 非医疗：基于声音活动与约 90 分钟超日节律的粗估计，不是脑电分期，也不是「深睡/REM 分钟数」。</string>
+    <string name="timeline_legend">色块=声学事件（可点回放）· 黄竖线=亮屏/充电等打断 · 蓝带=声学活跃度 · 上层色带=实验性周期示意</string>
+    <string name="timeline_events_list">事件列表</string>
+    <string name="delete_confirm_title">删除本夜？</string>
+    <string name="delete_confirm_msg">将删除该夜的事件索引与对应音频片段，此操作不可撤销。</string>
+    <string name="clear_all_confirm_title">清空全部历史？</string>
+    <string name="clear_all_confirm_msg">将删除所有已结束的睡眠记录及其音频片段。进行中的监测不会中断。此操作不可撤销。</string>
+    <string name="clear_all_confirm_again_title">再次确认</string>
+    <string name="clear_all_confirm_again_msg">确定要清空全部历史数据吗？</string>
+    <string name="delete_done">已删除</string>
+    <string name="clear_done">已清空 %1$d 条记录</string>
+    <string name="delete_failed">删除失败（记录可能正在进行中）</string>
+    <string name="action_cancel">取消</string>
+    <string name="action_delete">删除</string>
+    <string name="action_clear">清空</string>
+    <string name="open_last_detail">查看上次整夜时间轴</string>
 </resources>

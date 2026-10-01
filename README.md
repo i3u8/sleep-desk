@@ -2,7 +2,15 @@
 
 Android sleep tracker — **microphone ambient monitoring** (no bedside placement required), one-tap start/stop, local-only.
 
-**Package:** `com.i3u8.sleepdesk` · **v0.2.2** · MIT
+**Package:** `com.i3u8.sleepdesk` · **v0.2.4** · MIT
+
+## What’s new in v0.2.4
+
+- **Delete data**: delete one night (Home / History / session detail) + **清空全部** with double confirm; cascades `audio_clips`
+- **Full-night timeline** in session detail: colored event markers, interrupt ticks (screen/charge), tap to replay
+- **Acoustic activity band** labeled「夜间声音与体动活跃度（非睡眠分期）」
+- **Experimental cycle band** (toggle): wake-ish / quieter-NREM-ish / rem-ish heuristic — marked 实验性/非医疗, not a hypnogram
+- Includes [`docs/sleep-sounds-and-cycles.md`](docs/sleep-sounds-and-cycles.md)
 
 ## What’s new in v0.2.2
 
@@ -55,7 +63,7 @@ MainActivity (BottomNav: 首页 / 历史)
   └─ HistoryFragment — Canvas duration bars + session cards → event list
 
 EventDetailBottomSheet — type / time / Play-Pause via ClipPlayer (MediaPlayer)
-SessionDetailBottomSheet — night’s events
+SessionDetailBottomSheet — full-night timeline + events + delete
 
 SleepTrackingService (FGS microphone)
   ├─ NightAudioEngineImpl  ← docs/audio-algo.md (high-sens + MIC fallback)

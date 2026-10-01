@@ -1,6 +1,7 @@
 package com.i3u8.sleepdesk.data
 
 import android.content.Context
+import com.i3u8.sleepdesk.audio.AudioClipStore
 import com.i3u8.sleepdesk.audio.NightEvent
 import org.json.JSONArray
 import org.json.JSONObject
@@ -15,6 +16,7 @@ class SessionStore(context: Context) {
 
     private val appContext = context.applicationContext
     private val file = File(appContext.filesDir, "sessions.json")
+    private val clipStore = AudioClipStore(appContext)
     private val lock = Any()
 
     fun loadCurrent(): SleepSession? = synchronized(lock) {
@@ -59,10 +61,51 @@ class SessionStore(context: Context) {
         val history = loadHistoryUnlocked().toMutableList()
         history.add(0, current)
         while (history.size > MAX_HISTORY) {
-            history.removeAt(history.lastIndex)
+            val dropped = history.removeAt(history.lastIndex)
+            clipStore.deleteSessionClips(dropped.id)
         }
         writeRoot(running = false, current = null, history = history)
         current
+    }
+
+    /**
+     * Delete one finished session from history and cascade-delete its audio clips.
+     * Does not delete a currently running session.
+     */
+    fun deleteOne(sessionId: String): Boolean = synchronized(lock) {
+        val root = readRoot() ?: return false
+        val running = root.optBoolean("running", false)
+        val current = if (running) {
+            root.optJSONObject("current")?.let { parseSession(it) }
+        } else null
+        if (current?.id == sessionId) return false
+
+        val history = loadHistoryUnlocked().toMutableList()
+        val idx = history.indexOfFirst { it.id == sessionId }
+        if (idx < 0) return false
+        history.removeAt(idx)
+        writeRoot(running = running, current = current, history = history)
+        clipStore.deleteSessionClips(sessionId)
+        true
+    }
+
+    /**
+     * Clear all finished history sessions and their clips.
+     * Leaves a running session (if any) untouched.
+     * @return number of sessions removed
+     */
+    fun clearAll(): Int = synchronized(lock) {
+        val root = readRoot()
+        val running = root?.optBoolean("running", false) == true
+        val current = if (running) {
+            root?.optJSONObject("current")?.let { parseSession(it) }
+        } else null
+        val history = loadHistoryUnlocked()
+        for (s in history) {
+            clipStore.deleteSessionClips(s.id)
+        }
+        writeRoot(running = running, current = current, history = emptyList())
+        history.size
     }
 
     private fun loadHistoryUnlocked(): List<SleepSession> {
