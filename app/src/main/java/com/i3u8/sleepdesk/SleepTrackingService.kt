@@ -6,34 +6,37 @@ import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
 import android.content.Intent
-import android.hardware.Sensor
-import android.hardware.SensorEvent
-import android.hardware.SensorEventListener
-import android.hardware.SensorManager
+import android.content.pm.ServiceInfo
+import android.os.Build
 import android.os.IBinder
 import android.os.PowerManager
 import androidx.core.app.NotificationCompat
-import kotlin.math.sqrt
+import androidx.core.app.ServiceCompat
+import com.i3u8.sleepdesk.audio.AudioAlgoConfig
+import com.i3u8.sleepdesk.audio.AudioClipStore
+import com.i3u8.sleepdesk.audio.NightAudioEngine
+import com.i3u8.sleepdesk.audio.NightAudioEngineImpl
+import com.i3u8.sleepdesk.audio.NightAudioListener
+import com.i3u8.sleepdesk.audio.NightEvent
+import com.i3u8.sleepdesk.data.SessionStore
+import com.i3u8.sleepdesk.data.SleepEvent
 
 /**
- * Foreground service: low-rate accelerometer sampling + 60s motion-energy buckets.
+ * FGS (microphone): owns [NightAudioEngine] lifecycle + secondary non-mic signals.
+ * Accel is NOT primary in v0.2.
  */
-class SleepTrackingService : Service(), SensorEventListener {
+class SleepTrackingService : Service(), NightAudioListener {
 
     private lateinit var store: SessionStore
-    private var sensorManager: SensorManager? = null
+    private lateinit var audioEngine: NightAudioEngine
     private var wakeLock: PowerManager.WakeLock? = null
-
-    private var bucketStartMs = 0L
-    private var sumDelta = 0.0
-    private var sampleCount = 0
-    private var lastX = Float.NaN
-    private var lastY = Float.NaN
-    private var lastZ = Float.NaN
+    private var secondary: SecondarySignals? = null
 
     override fun onCreate() {
         super.onCreate()
         store = SessionStore(this)
+        audioEngine = NightAudioEngineImpl(this, AudioClipStore(this))
+        audioEngine.setListener(this)
         createChannel()
     }
 
@@ -44,41 +47,81 @@ class SleepTrackingService : Service(), SensorEventListener {
                 return START_NOT_STICKY
             }
             else -> {
-                startForeground(NOTIFICATION_ID, buildNotification(getString(R.string.notif_tracking)))
+                val notification = buildNotification(getString(R.string.notif_tracking))
+                if (Build.VERSION.SDK_INT >= 34) {
+                    ServiceCompat.startForeground(
+                        this,
+                        NOTIFICATION_ID,
+                        notification,
+                        ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
+                    )
+                } else {
+                    startForeground(NOTIFICATION_ID, notification)
+                }
                 acquireWakeLock()
-                ensureSession()
-                startSensors()
+                val session = store.loadCurrent() ?: store.startNew()
+                if (!audioEngine.isRunning()) {
+                    audioEngine.start(session.id, AudioAlgoConfig())
+                }
+                startSecondary()
             }
         }
         return START_STICKY
     }
 
-    private fun ensureSession() {
-        if (store.loadCurrent() == null) {
-            store.startNew()
-        }
-        bucketStartMs = System.currentTimeMillis()
-        resetBucketAccum()
+    override fun onEvent(event: NightEvent) {
+        store.appendNightEvent(event)
+        updateNotification()
+        sendBroadcast(Intent(ACTION_EVENT).setPackage(packageName))
     }
 
-    private fun startSensors() {
-        val sm = getSystemService(SENSOR_SERVICE) as SensorManager
-        sensorManager = sm
-        val accel = sm.getDefaultSensor(Sensor.TYPE_ACCELEROMETER) ?: return
-        // ~5–10 Hz is enough for bed-side motion; SENSOR_DELAY_NORMAL ~5 Hz
-        sm.registerListener(this, accel, SensorManager.SENSOR_DELAY_NORMAL)
+    override fun onEngineError(t: Throwable) {
+        val nm = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
+        nm.notify(
+            NOTIFICATION_ID,
+            buildNotification(getString(R.string.notif_mic_error))
+        )
     }
 
-    private fun stopSensors() {
-        sensorManager?.unregisterListener(this)
-        sensorManager = null
+    private fun startSecondary() {
+        if (secondary != null) return
+        secondary = SecondarySignals(this) { event ->
+            if (event.type == SleepEvent.TYPE_SCREEN_ON) {
+                audioEngine.onAuxScreenChanged(true)
+            } else if (event.type == SleepEvent.TYPE_SCREEN_OFF) {
+                audioEngine.onAuxScreenChanged(false)
+            }
+            store.appendEvent(event)
+            updateNotification()
+            sendBroadcast(Intent(ACTION_EVENT).setPackage(packageName))
+        }.also { it.start() }
+    }
+
+    private fun updateNotification() {
+        val cur = store.loadCurrent()
+        val audioN = cur?.audioEventCount() ?: 0
+        val clips = cur?.clipCount() ?: 0
+        val text = getString(R.string.notif_tracking_stats, audioN, clips)
+        val nm = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
+        nm.notify(NOTIFICATION_ID, buildNotification(text))
+    }
+
+    private fun finishAndStop() {
+        audioEngine.stop()
+        secondary?.stop()
+        secondary = null
+        store.stop()
+        releaseWakeLock()
+        stopForeground(STOP_FOREGROUND_REMOVE)
+        sendBroadcast(Intent(ACTION_STOPPED).setPackage(packageName))
+        stopSelf()
     }
 
     private fun acquireWakeLock() {
         val pm = getSystemService(POWER_SERVICE) as PowerManager
         wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "sleepdesk:tracking").also {
             it.setReferenceCounted(false)
-            if (!it.isHeld) it.acquire(12 * 60 * 60 * 1000L) // up to 12h
+            if (!it.isHeld) it.acquire(14 * 60 * 60 * 1000L)
         }
     }
 
@@ -87,64 +130,9 @@ class SleepTrackingService : Service(), SensorEventListener {
         wakeLock = null
     }
 
-    override fun onSensorChanged(event: SensorEvent?) {
-        if (event?.sensor?.type != Sensor.TYPE_ACCELEROMETER) return
-        val x = event.values[0]
-        val y = event.values[1]
-        val z = event.values[2]
-        if (!lastX.isNaN()) {
-            val dx = x - lastX
-            val dy = y - lastY
-            val dz = z - lastZ
-            sumDelta += sqrt((dx * dx + dy * dy + dz * dz).toDouble())
-            sampleCount++
-        }
-        lastX = x
-        lastY = y
-        lastZ = z
-
-        val now = System.currentTimeMillis()
-        if (now - bucketStartMs >= SessionStore.BUCKET_MS) {
-            flushBucket(bucketStartMs)
-            // Advance in whole buckets to avoid drift pile-up
-            while (now - bucketStartMs >= SessionStore.BUCKET_MS) {
-                bucketStartMs += SessionStore.BUCKET_MS
-            }
-            resetBucketAccum()
-        }
-    }
-
-    private fun flushBucket(startMs: Long) {
-        val energy = if (sampleCount > 0) sumDelta / sampleCount else 0.0
-        store.appendBucket(startMs, energy)
-        val nm = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
-        nm.notify(NOTIFICATION_ID, buildNotification(getString(R.string.notif_tracking)))
-    }
-
-    private fun resetBucketAccum() {
-        sumDelta = 0.0
-        sampleCount = 0
-        lastX = Float.NaN
-        lastY = Float.NaN
-        lastZ = Float.NaN
-    }
-
-    private fun finishAndStop() {
-        // Flush partial bucket
-        if (sampleCount > 0) {
-            flushBucket(bucketStartMs)
-        }
-        store.stop()
-        stopSensors()
-        releaseWakeLock()
-        stopForeground(STOP_FOREGROUND_REMOVE)
-        stopSelf()
-    }
-
-    override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) = Unit
-
     override fun onDestroy() {
-        stopSensors()
+        audioEngine.stop()
+        secondary?.stop()
         releaseWakeLock()
         super.onDestroy()
     }
@@ -153,12 +141,13 @@ class SleepTrackingService : Service(), SensorEventListener {
 
     private fun createChannel() {
         val nm = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
-        val ch = NotificationChannel(
-            CHANNEL_ID,
-            getString(R.string.notif_channel),
-            NotificationManager.IMPORTANCE_LOW
+        nm.createNotificationChannel(
+            NotificationChannel(
+                CHANNEL_ID,
+                getString(R.string.notif_channel),
+                NotificationManager.IMPORTANCE_LOW
+            )
         )
-        nm.createNotificationChannel(ch)
     }
 
     private fun buildNotification(text: String): Notification {
@@ -185,6 +174,8 @@ class SleepTrackingService : Service(), SensorEventListener {
 
     companion object {
         const val ACTION_STOP = "com.i3u8.sleepdesk.STOP"
+        const val ACTION_EVENT = "com.i3u8.sleepdesk.EVENT"
+        const val ACTION_STOPPED = "com.i3u8.sleepdesk.STOPPED"
         const val CHANNEL_ID = "sleep_tracking"
         const val NOTIFICATION_ID = 1001
     }
