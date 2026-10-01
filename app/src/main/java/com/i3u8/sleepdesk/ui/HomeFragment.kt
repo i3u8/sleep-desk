@@ -15,6 +15,8 @@ import android.widget.TextView
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.ContextCompat
 import androidx.fragment.app.Fragment
+import android.widget.Toast
+import com.google.android.material.snackbar.Snackbar
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import com.google.android.material.button.MaterialButton
@@ -60,6 +62,12 @@ class HomeFragment : Fragment() {
 
     private val refreshReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
+            if (intent?.action == SleepTrackingService.ACTION_EVENT) {
+                val type = intent.getStringExtra(SleepTrackingService.EXTRA_EVENT_TYPE)
+                if (!type.isNullOrEmpty()) {
+                    showLiveEventFeedback(type)
+                }
+            }
             refreshUi()
         }
     }
@@ -169,6 +177,21 @@ class HomeFragment : Fragment() {
                 EventDetailBottomSheet.newInstance(e)
                     .show(parentFragmentManager, EventDetailBottomSheet.TAG)
             }
+        }
+    }
+
+
+    private fun showLiveEventFeedback(type: String) {
+        if (!isAdded || view == null) return
+        val label = EventLabels.typeLabel(requireContext(), type)
+        val msg = getString(R.string.event_live_toast, label)
+        val anchor = view ?: return
+        try {
+            Snackbar.make(anchor, msg, Snackbar.LENGTH_SHORT)
+                .setAnchorView(btnToggle)
+                .show()
+        } catch (_: Exception) {
+            Toast.makeText(requireContext(), msg, Toast.LENGTH_SHORT).show()
         }
     }
 

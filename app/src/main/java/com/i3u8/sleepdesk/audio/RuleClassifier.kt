@@ -1,64 +1,66 @@
 package com.i3u8.sleepdesk.audio
 
 /**
- * v1 rule classifier per docs/audio-algo.md §3.4.
+ * v1.1 rule classifier — relaxed thresholds (prefer recall over precision).
+ * @see docs/audio-algo.md §3.4
  */
 object RuleClassifier {
     fun classify(f: ClipFeatures, screenOnNearby: Boolean): Pair<NightEventType, Float> {
-        // Snore
-        if (f.periodicity >= 0.45f &&
-            f.periodSec in 0.4f..3.0f &&
-            (f.bandHigh < 0.35f) &&
-            f.durationMs >= 1200f
+        // Snore — lower periodicity / shorter bout OK (distant, soft snore)
+        if (f.periodicity >= 0.32f &&
+            f.periodSec in 0.35f..3.5f &&
+            f.bandHigh < 0.42f &&
+            f.durationMs >= 800f
         ) {
-            val conf = (0.45f + 0.4f * f.periodicity + 0.1f * (1f - f.bandHigh))
-                .coerceIn(0.55f, 0.95f)
+            val conf = (0.40f + 0.4f * f.periodicity + 0.1f * (1f - f.bandHigh))
+                .coerceIn(0.42f, 0.95f)
             return NightEventType.SNORE to conf
         }
 
         // Cough
-        if (f.durationMs in 80f..600f &&
-            f.attackMs < 80f &&
-            (f.spectralCentroid > 1500f || f.bandHigh > 0.28f)
+        if (f.durationMs in 60f..700f &&
+            f.attackMs < 120f &&
+            (f.spectralCentroid > 1200f || f.bandHigh > 0.22f)
         ) {
-            val conf = 0.6f + 0.2f * (1f - f.attackMs / 80f).coerceIn(0f, 1f)
-            return NightEventType.COUGH to conf.coerceIn(0.55f, 0.92f)
+            val conf = 0.52f + 0.2f * (1f - f.attackMs / 120f).coerceIn(0f, 1f)
+            return NightEventType.COUGH to conf.coerceIn(0.42f, 0.92f)
         }
 
         // Speech (coarse)
-        if (f.durationMs in 400f..8000f &&
-            f.bandMid > 0.28f &&
-            f.periodicity < 0.35f &&
-            f.spectralCentroid in 400f..3500f
+        if (f.durationMs in 300f..8000f &&
+            f.bandMid > 0.22f &&
+            f.periodicity < 0.40f &&
+            f.spectralCentroid in 350f..4000f
         ) {
-            var conf = 0.58f + 0.15f * f.bandMid
+            var conf = 0.50f + 0.18f * f.bandMid
             if (screenOnNearby) conf += 0.08f
-            return NightEventType.SPEECH to conf.coerceIn(0.55f, 0.9f)
+            return NightEventType.SPEECH to conf.coerceIn(0.42f, 0.9f)
         }
 
         // ENV_NOISE: elevated but smooth / long / low periodicity
-        if (f.durationMs >= 3000f &&
-            f.attackMs > 200f &&
-            f.periodicity < 0.3f &&
+        if (f.durationMs >= 3500f &&
+            f.attackMs > 250f &&
+            f.periodicity < 0.28f &&
             f.zcrStd < 0.05f
         ) {
-            return NightEventType.ENV_NOISE to 0.7f
+            return NightEventType.ENV_NOISE to 0.65f
         }
 
         // Abnormal: very loud peak + high centroid
-        if (f.peakDb > -18f && f.spectralCentroid > 2500f) {
-            return NightEventType.ABNORMAL to 0.75f
+        if (f.peakDb > -20f && f.spectralCentroid > 2200f) {
+            return NightEventType.ABNORMAL to 0.72f
         }
 
-        // Short junk
-        if (f.durationMs < 150f) {
+        // Short junk only if truly tiny
+        if (f.durationMs < 80f) {
             return NightEventType.FALSE_TRIGGER to 0.2f
         }
 
-        // Default night-wake-ish burst
-        var conf = 0.58f
+        // Default night-wake-ish burst (catch-all for distant rustle / sit-up)
+        var conf = 0.50f
         if (screenOnNearby) conf += 0.1f
-        if (f.peakDb > -28f) conf += 0.05f
-        return NightEventType.NIGHT_WAKE_SOUND to conf.coerceIn(0.55f, 0.88f)
+        if (f.peakDb > -32f) conf += 0.06f
+        if (f.durationMs >= 200f) conf += 0.04f
+        return NightEventType.NIGHT_WAKE_SOUND to conf.coerceIn(0.42f, 0.88f)
     }
 }

@@ -11,6 +11,7 @@ import java.util.concurrent.atomic.AtomicBoolean
 
 /**
  * Doc-aligned night ambient engine: relative energy gate → candidate → rule classify → AAC clip.
+ * Defaults prioritize recall (far desk / soft events) over precision.
  * @see docs/audio-algo.md
  */
 class NightAudioEngineImpl(
@@ -27,12 +28,10 @@ class NightAudioEngineImpl(
     @Volatile private var screenOnNearby = false
     @Volatile private var lastScreenChangeMs = 0L
 
-    // Noise floor: p20 over ~45s of idle hop dBFS
     private val floorWindow = ArrayDeque<Float>()
     private var noiseFloor = -50f
     private var smoothedDb = -60f
 
-    // Candidate state
     private var inCandidate = false
     private var candidateStartSample = 0L
     private var candidateStartMs = 0L
@@ -98,33 +97,43 @@ class NightAudioEngineImpl(
     private fun loop() {
         val sr = config.sampleRate
         val hopSamples = (sr * config.hopMs / 1000).coerceAtLeast(1)
-        val source = pickAudioSource()
-        val minBuf = AudioRecord.getMinBufferSize(
-            sr, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT
-        )
-        if (minBuf <= 0) {
-            listener?.onEngineError(IllegalStateException("AudioRecord minBuf=$minBuf"))
-            return
-        }
-        val bufSize = maxOf(minBuf, sr) // ≥1s
-        val recorder = try {
-            AudioRecord(source, sr, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT, bufSize * 2)
-        } catch (e: SecurityException) {
-            listener?.onEngineError(e)
-            return
-        }
-        if (recorder.state != AudioRecord.STATE_INITIALIZED) {
-            listener?.onEngineError(IllegalStateException("AudioRecord not initialized"))
-            recorder.release()
-            return
-        }
+        var source = initialAudioSource()
+        var recorder = openRecorder(source, sr) ?: return
 
         val hop = ShortArray(hopSamples)
+        val probeLevels = ArrayDeque<Float>()
+        var probed = !config.fallbackMicIfLowGain || source == MediaRecorder.AudioSource.MIC
+        val probeHops = (config.lowGainProbeMs / config.hopMs).coerceAtLeast(40)
+
         try {
             recorder.startRecording()
+            Log.i(TAG, "recording source=$source margin=${config.effectiveMarginDb()} sens=${config.sensitivity}")
             while (running.get()) {
                 val n = recorder.read(hop, 0, hopSamples)
                 if (n <= 0) continue
+
+                if (!probed && !inCandidate) {
+                    val rms = FeatureExtractor.rmsDb(hop, n)
+                    probeLevels.addLast(rms)
+                    if (probeLevels.size >= probeHops) {
+                        val med = probeLevels.sorted()[probeLevels.size / 2]
+                        if (med < config.lowGainDbThreshold && source != MediaRecorder.AudioSource.MIC) {
+                            Log.i(TAG, "low gain on UNPROCESSED (median=$med dB) → fallback MIC")
+                            try {
+                                recorder.stop()
+                            } catch (_: Exception) {
+                            }
+                            recorder.release()
+                            source = MediaRecorder.AudioSource.MIC
+                            recorder = openRecorder(source, sr) ?: return
+                            recorder.startRecording()
+                            floorWindow.clear()
+                            probeLevels.clear()
+                        }
+                        probed = true
+                    }
+                }
+
                 processHop(hop, n)
             }
         } finally {
@@ -133,14 +142,39 @@ class NightAudioEngineImpl(
             } catch (_: Exception) {
             }
             recorder.release()
-            // Drop open candidate on stop (user ending session)
             inCandidate = false
         }
     }
 
-    private fun pickAudioSource(): Int {
+    private fun openRecorder(source: Int, sr: Int): AudioRecord? {
+        val minBuf = AudioRecord.getMinBufferSize(
+            sr, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT
+        )
+        if (minBuf <= 0) {
+            listener?.onEngineError(IllegalStateException("AudioRecord minBuf=$minBuf"))
+            return null
+        }
+        val bufSize = maxOf(minBuf, sr)
+        val recorder = try {
+            AudioRecord(source, sr, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT, bufSize * 2)
+        } catch (e: SecurityException) {
+            listener?.onEngineError(e)
+            return null
+        }
+        if (recorder.state != AudioRecord.STATE_INITIALIZED) {
+            recorder.release()
+            if (source != MediaRecorder.AudioSource.MIC) {
+                Log.w(TAG, "source $source failed init, trying MIC")
+                return openRecorder(MediaRecorder.AudioSource.MIC, sr)
+            }
+            listener?.onEngineError(IllegalStateException("AudioRecord not initialized"))
+            return null
+        }
+        return recorder
+    }
+
+    private fun initialAudioSource(): Int {
         if (config.preferUnprocessedSource) {
-            // UNPROCESSED = 9 (API 24+)
             return try {
                 MediaRecorder.AudioSource.UNPROCESSED
             } catch (_: Exception) {
@@ -157,21 +191,21 @@ class NightAudioEngineImpl(
         val now = System.currentTimeMillis()
 
         val rms = FeatureExtractor.rmsDb(frame, count)
-        // EMA ~200ms: alpha ≈ hopMs/200
-        val alpha = (config.hopMs / 200f).coerceIn(0.05f, 0.5f)
+        val smoothMs = config.energySmoothMs.coerceAtLeast(100).toFloat()
+        val alpha = (config.hopMs / smoothMs).coerceIn(0.03f, 0.5f)
         smoothedDb = smoothedDb * (1 - alpha) + rms * alpha
 
-        val margin = config.marginDb
+        val margin = config.effectiveMarginDb()
         val over = smoothedDb > noiseFloor + margin
 
         if (!inCandidate) {
             updateNoiseFloor(rms)
             if (over) {
                 overCount++
-                val need = (config.minCandidateMs / config.hopMs).coerceAtLeast(1)
+                // Enter sooner: ~half of minCandidate for gate open (recall)
+                val need = ((config.minCandidateMs / 2) / config.hopMs).coerceAtLeast(1)
                 if (overCount >= need) {
-                    // Session head silence: skip first 30s
-                    if (now - sessionStartMs < 30_000L) {
+                    if (now - sessionStartMs < config.sessionWarmupMs) {
                         overCount = 0
                     } else {
                         inCandidate = true
@@ -184,13 +218,13 @@ class NightAudioEngineImpl(
                 overCount = 0
             }
         } else {
-            if (!over || smoothedDb < noiseFloor + margin / 2f) {
+            if (!over || smoothedDb < noiseFloor + margin * 0.45f) {
                 underCount++
             } else {
                 underCount = 0
             }
             val elapsedMs = now - candidateStartMs
-            val endBySilence = underCount >= (150 / config.hopMs).coerceAtLeast(1)
+            val endBySilence = underCount >= (100 / config.hopMs).coerceAtLeast(1)
             val endByMax = elapsedMs >= config.maxCandidateMs
             if (endBySilence || endByMax) {
                 val endSample = ring.totalSamples()
@@ -204,13 +238,13 @@ class NightAudioEngineImpl(
     }
 
     private fun updateNoiseFloor(rmsDb: Float) {
-        // Only idle hops
         floorWindow.addLast(rmsDb)
-        val maxN = (45_000 / config.hopMs).coerceAtLeast(100)
+        val maxN = (config.floorWindowMs / config.hopMs).coerceAtLeast(100)
         while (floorWindow.size > maxN) floorWindow.removeFirst()
-        if (floorWindow.size >= 40) {
+        if (floorWindow.size >= 30) {
             val sorted = floorWindow.sorted()
-            val idx = (sorted.size * 0.20).toInt().coerceIn(0, sorted.lastIndex)
+            val pct = config.floorPercentile.coerceIn(0.05f, 0.4f)
+            val idx = (sorted.size * pct).toInt().coerceIn(0, sorted.lastIndex)
             noiseFloor = sorted[idx]
             listener?.onNoiseFloor(noiseFloor)
         }
@@ -224,7 +258,6 @@ class NightAudioEngineImpl(
         var from = startSample - pre
         var to = endSample + post
         if (to - from > maxSamples) {
-            // Prefer keeping event center
             val mid = (startSample + endSample) / 2
             from = mid - maxSamples / 2
             to = from + maxSamples
@@ -233,17 +266,18 @@ class NightAudioEngineImpl(
         if (pcm.isEmpty()) return
 
         val durMs = (endMs - startMs).toFloat().coerceAtLeast(config.minCandidateMs.toFloat())
+        // Drop only ultra-short after silence merge
+        if (durMs < config.minCandidateMs * 0.6f) return
+
         val feats = FeatureExtractor.extract(pcm, sr, durMs)
         val nearScreen = screenOnNearby || (System.currentTimeMillis() - lastScreenChangeMs < 30_000L)
         val (type, conf) = RuleClassifier.classify(feats, nearScreen)
 
         if (type == NightEventType.FALSE_TRIGGER || conf < config.confidenceFloor) return
 
-        // Snore merge cooldown
         if (type == NightEventType.SNORE) {
             val now = System.currentTimeMillis()
             if (now - lastSnoreEventMs < config.snoreMergeMs) {
-                // Same bout — maybe skip indexing entirely or only re-clip periodically
                 if (now - lastSnoreClipMs < config.snoreClipIntervalMs) return
             }
             lastSnoreEventMs = now
@@ -279,7 +313,7 @@ class NightAudioEngineImpl(
             confidence = conf,
             clipRelativePath = clipPath,
             features = feats.toMap(),
-            algoVersion = "audio-v1"
+            algoVersion = "audio-v1.1"
         )
         listener?.onEvent(event)
     }

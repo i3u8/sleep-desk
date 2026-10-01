@@ -20,6 +20,7 @@
     <string name="events_tonight">今夜事件</string>
     <string name="events_last">上次事件</string>
     <string name="events_empty">暂无事件记录</string>
+    <string name="event_live_toast">检测到：%1$s</string>
     <string name="event_has_clip">可回放</string>
     <string name="event_no_clip">无片段</string>
     <string name="event_aux">辅信号</string>

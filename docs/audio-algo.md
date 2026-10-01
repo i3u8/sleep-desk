@@ -60,15 +60,15 @@
 | 采样率 | **16000 Hz** | 8000 / 16000 / 44100 | 16 kHz 覆盖鼾声主能量与咳嗽冲击；算力约为 44.1 kHz 的 ~1/3 |
 | 声道 | **mono** | mono | 床边单麦足够；减半带宽与编码体积 |
 | 编码 PCM | **16-bit** (`ENCODING_PCM_16BIT`) | float 内部可转 | `AudioRecord` 最稳妥；特征用 float 归一化 |
-| AudioSource | **`UNPROCESSED`**（不可用则 `MIC`） | `VOICE_RECOGNITION` 慎用 | 系统 AGC/降噪易抹掉低电平鼾声细节 |
+| AudioSource | **先 `UNPROCESSED`，低增益则回退 `MIC`** | 仅 `MIC` | 远距离时 UNPROCESSED 无 AGC 可能过弱；引擎探测 idle 中位数 < −52 dBFS 后自动切 MIC |
 | AGC | **关**（不强依赖系统 AGC） | 极安静房间可弱开 | 夜间相对门限已自适应；AGC 会扭曲能量地板 |
 | 系统降噪 / NS | **默认关** | 嘈杂城市窗边可试 | 可能削谐波结构，伤害鼾声周期检测 |
 | 分析窗长 | **30 ms**（480 samples @16k） | 20–40 ms | 兼顾时间分辨率与谱稳定 |
 | 跳步 hop | **15 ms**（240 samples） | 10–20 ms | 50% 重叠，CPU 可接受 |
-| 能量平滑 | 200 ms EMA | 100–400 ms | 抑瞬时尖峰误触发 |
-| 噪声地板更新 | 每 1 s，取近 30–60 s 的低分位（p20） | — | **相对门限**，避免固定 dBFS |
-| 门限裕量 | 噪声地板 + **8–12 dB** | 6–15 dB | 灵敏度旋钮；误报多则加大 |
-| 候选最短时长 | **250 ms** | 150–400 ms | 滤除极短碰触 |
+| 能量平滑 | **350 ms EMA**（远距默认） | 100–400 ms | 更长积分抬高远处弱事件 |
+| 噪声地板更新 | 近 **60 s** 低分位（**p15**） | p10–p25 / 30–90 s | 自动噪声底；仅 idle 更新 |
+| 门限裕量 | 噪声地板 + **~4.8–6 dB**（默认高灵敏度） | 3–12 dB | `marginDb/sensitivity`；宁可多假阳少漏检 |
+| 候选最短时长 | **150 ms** | 80–400 ms | 放宽以减少漏检 |
 | 候选最长（单段） | **8 s**（再切段） | 6–10 s | 与片段上限对齐 |
 | 分类冷却 | 同类事件 **3–8 s** 合并 | — | 抑重复打点 |
 | 环形缓冲 | **前后各 1.5 s** PCM 常驻 | 1–2 s | 触发时能取 pre-roll |
@@ -99,6 +99,19 @@ audioSource    = UNPROCESSED if available else MIC
 3. 屏灭时保持 `AudioRecord` 连续读（断续启停反而更耗且易丢事件）；若需极致省电，可做「静音 5 分钟后降 hop 到 30 ms」——v1 可不做。  
 4. 通知必须 ongoing；Android 14+ 麦克风 FGS 需用户从前台启动会话（现有 Start 按钮路径已满足）。
 
+
+### 2.4 远距离 / 高灵敏度（v0.2.2）
+
+手机常在床头柜/充电器上，声源距离 1–3 m。实现侧默认：
+
+1. **先开 `UNPROCESSED`**；约 3.5 s idle 探测若能量中位数 < −52 dBFS，**自动回退 `MIC`**（系统增益帮远距）。  
+2. **更长能量 EMA（350 ms）** + **更低相对门限**（`sensitivity` 默认 1.25）。  
+3. **噪声底 p15 / 60 s**，会话前 ~12 s warmup 不报事件。  
+4. 规则分类器放宽周期/时长/频带门槛，`confidenceFloor≈0.42`，宁可多记 `NIGHT_WAKE_SOUND` 也不要漏鼾/突发。  
+5. UI：事件写入后立刻广播；首页 Snackbar「检测到：…」+ 列表实时刷新。
+
+调低灵敏度：增大 `AudioAlgoConfig.marginDb` 或把 `sensitivity` 调到 `1.0` / `0.85`。
+
 ---
 
 ## 3. 特征与检测管线
@@ -127,14 +140,15 @@ AudioRecord (16 kHz mono)
 
 - 维护滑动窗（如 45 s）的 **p20** 作为 `noiseFloor`。  
 - 仅在「非候选、非事件段」更新地板，避免事件污染。  
-- 触发条件：`smoothedDb > noiseFloor + marginDb` 连续 `N` 个 hop（默认对应 ≥250 ms）。
+- 触发条件：`smoothedDb > noiseFloor + effectiveMarginDb` 连续 `N` 个 hop（默认约 ≥75–150 ms，高灵敏度）。  
+- `effectiveMarginDb = marginDb / sensitivity`（默认 `marginDb=6`, `sensitivity=1.25` → ≈4.8 dB）。
 
 **为何不用固定 dB**：床边距离、机型麦灵敏度、空调噪声差异巨大；相对门限是 v1 稳定性的关键。
 
 ### 3.3 阶段 B：候选段边界
 
 - **起点**：门限连续满足。  
-- **终点**：回落到 `noiseFloor + marginDb/2` 持续 ≥150 ms，或达到 `maxCandidateMs`（8 s）强制切段。  
+- **终点**：回落到 `noiseFloor + margin×0.45` 持续 ≥100 ms，或达到 `maxCandidateMs`（8 s）强制切段。  
 - 从环形缓冲取出：`[t_start - preRoll, t_end + postRoll]`，总长 cap 到 `maxClipMs`（默认 8 s）。
 
 ### 3.4 阶段 C：轻量特征（规则分类输入）

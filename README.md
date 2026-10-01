@@ -2,14 +2,14 @@
 
 Android sleep tracker — **microphone ambient monitoring** (no bedside placement required), one-tap start/stop, local-only.
 
-**Package:** `com.i3u8.sleepdesk` · **v0.2.1** · MIT
+**Package:** `com.i3u8.sleepdesk` · **v0.2.2** · MIT
 
-## What’s new in v0.2.1
+## What’s new in v0.2.2
 
-- **Tap any event row** → bottom sheet with type, time, Play/Pause of the saved AAC clip under `filesDir`
-- Missing clip → clear message; playback stops on dismiss / other play / pause
-- **Material 3** dark UI: big circular sleep button, tonight stats cards, readable history cards + chart
-- Still two tabs **首页 / 历史**, one-tap start/stop
+- **Higher sensitivity** (default): lower relative energy margin, shorter candidate gate, relaxed `RuleClassifier` — fewer misses, more false positives OK
+- **Far desk**: try `UNPROCESSED`, auto-fallback to `MIC` if idle gain too low; longer EMA + p15 noise floor — see [`docs/audio-algo.md`](docs/audio-algo.md) §2.4
+- **Live feedback**: on each event, home shows Snackbar「检测到：…」and refreshes the event list immediately (not only after stop)
+- Includes v0.2.1: **tap-to-replay** AAC clips + **Material 3** UI polish
 
 ## What’s in v0.2
 
@@ -25,8 +25,8 @@ Android sleep tracker — **microphone ambient monitoring** (no bedside placemen
 
 1. Phone can stay on the nightstand / charger — **not** on the mattress.
 2. Tap **开始睡** → grant **microphone** (and notifications on Android 13+).
-3. Leave the app; ongoing notification keeps ambient monitoring.
-4. Morning: tap **结束** → see tonight stats + event list on 首页; tap an event to replay its clip. Past nights on 历史 (tap a card → event list).
+3. Leave the app; ongoing notification keeps ambient monitoring. When an event fires, the home tab shows a short「检测到」toast and inserts the row live.
+4. Morning: tap **结束** → tonight stats + event list; tap an event to replay its clip. Past nights on 历史 (tap a card → event list).
 
 ## Build
 
@@ -51,14 +51,14 @@ echo "sdk.dir=/path/to/Android/Sdk" > local.properties
 
 ```
 MainActivity (BottomNav: 首页 / 历史)
-  ├─ HomeFragment — big sleep button, tonight stats, tappable event rows
+  ├─ HomeFragment — big sleep button, tonight stats, live Snackbar + tappable events
   └─ HistoryFragment — Canvas duration bars + session cards → event list
 
 EventDetailBottomSheet — type / time / Play-Pause via ClipPlayer (MediaPlayer)
 SessionDetailBottomSheet — night’s events
 
 SleepTrackingService (FGS microphone)
-  ├─ NightAudioEngineImpl  ← docs/audio-algo.md
+  ├─ NightAudioEngineImpl  ← docs/audio-algo.md (high-sens + MIC fallback)
   │    AudioRecord 16 kHz mono → relative energy gate → candidates
   │    → RuleClassifier → NightEvent → AAC clip (AudioClipStore)
   └─ SecondarySignals (screen / charge / light)

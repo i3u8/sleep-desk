@@ -72,7 +72,12 @@ class SleepTrackingService : Service(), NightAudioListener {
     override fun onEvent(event: NightEvent) {
         store.appendNightEvent(event)
         updateNotification()
-        sendBroadcast(Intent(ACTION_EVENT).setPackage(packageName))
+        sendBroadcast(
+            Intent(ACTION_EVENT).setPackage(packageName)
+                .putExtra(EXTRA_EVENT_TYPE, event.type.name)
+                .putExtra(EXTRA_EVENT_ID, event.id)
+                .putExtra(EXTRA_HAS_CLIP, !event.clipRelativePath.isNullOrEmpty())
+        )
     }
 
     override fun onEngineError(t: Throwable) {
@@ -93,7 +98,12 @@ class SleepTrackingService : Service(), NightAudioListener {
             }
             store.appendEvent(event)
             updateNotification()
-            sendBroadcast(Intent(ACTION_EVENT).setPackage(packageName))
+            sendBroadcast(
+                Intent(ACTION_EVENT).setPackage(packageName)
+                    .putExtra(EXTRA_EVENT_TYPE, event.type)
+                    .putExtra(EXTRA_EVENT_ID, event.id)
+                    .putExtra(EXTRA_HAS_CLIP, false)
+            )
         }.also { it.start() }
     }
 
@@ -176,6 +186,9 @@ class SleepTrackingService : Service(), NightAudioListener {
         const val ACTION_STOP = "com.i3u8.sleepdesk.STOP"
         const val ACTION_EVENT = "com.i3u8.sleepdesk.EVENT"
         const val ACTION_STOPPED = "com.i3u8.sleepdesk.STOPPED"
+        const val EXTRA_EVENT_TYPE = "event_type"
+        const val EXTRA_EVENT_ID = "event_id"
+        const val EXTRA_HAS_CLIP = "has_clip"
         const val CHANNEL_ID = "sleep_tracking"
         const val NOTIFICATION_ID = 1001
     }
