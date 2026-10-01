@@ -1,33 +1,54 @@
 <?xml version="1.0" encoding="utf-8"?>
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:orientation="vertical"
-    android:padding="16dp"
+    android:paddingStart="16dp"
+    android:paddingEnd="16dp"
+    android:paddingTop="16dp"
+    android:paddingBottom="8dp"
     android:background="@color/bg">
 
     <TextView
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:text="@string/tab_history"
-        android:textSize="24sp"
-        android:textStyle="bold"
+        android:textAppearance="?attr/textAppearanceHeadlineMedium"
         android:textColor="@color/on_bg"
-        android:paddingBottom="8dp" />
+        android:textStyle="bold"
+        android:paddingBottom="12dp" />
 
-    <TextView
+    <com.google.android.material.card.MaterialCardView
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:text="@string/history_chart_title"
-        android:textSize="14sp"
-        android:textColor="@color/muted"
-        android:paddingBottom="4dp" />
+        android:layout_marginBottom="12dp"
+        app:cardBackgroundColor="@color/card_bg"
+        app:cardCornerRadius="20dp"
+        app:cardElevation="0dp"
+        app:strokeWidth="1dp"
+        app:strokeColor="@color/card_stroke">
 
-    <com.i3u8.sleepdesk.ui.DurationBarChartView
-        android:id="@+id/chartDuration"
-        android:layout_width="match_parent"
-        android:layout_height="180dp"
-        android:layout_marginBottom="12dp" />
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:padding="14dp">
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="@string/history_chart_title"
+                android:textAppearance="?attr/textAppearanceTitleSmall"
+                android:textColor="@color/on_bg"
+                android:paddingBottom="8dp" />
+
+            <com.i3u8.sleepdesk.ui.DurationBarChartView
+                android:id="@+id/chartDuration"
+                android:layout_width="match_parent"
+                android:layout_height="176dp" />
+        </LinearLayout>
+    </com.google.android.material.card.MaterialCardView>
 
     <TextView
         android:id="@+id/tvEmpty"
@@ -35,13 +56,16 @@
         android:layout_height="wrap_content"
         android:text="@string/history_empty"
         android:textColor="@color/muted"
+        android:textAppearance="?attr/textAppearanceBodyMedium"
         android:gravity="center"
-        android:padding="24dp"
+        android:padding="32dp"
         android:visibility="gone" />
 
     <androidx.recyclerview.widget.RecyclerView
         android:id="@+id/rvHistory"
         android:layout_width="match_parent"
         android:layout_height="0dp"
-        android:layout_weight="1" />
+        android:layout_weight="1"
+        android:clipToPadding="false"
+        android:paddingBottom="8dp" />
 </LinearLayout>

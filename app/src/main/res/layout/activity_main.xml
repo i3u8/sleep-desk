@@ -19,6 +19,9 @@
         android:background="@color/nav_bg"
         app:itemIconTint="@color/nav_item_color"
         app:itemTextColor="@color/nav_item_color"
+        app:itemRippleColor="@color/ripple"
+        app:itemActiveIndicatorStyle="@style/Widget.SleepDesk.BottomNavIndicator"
         app:menu="@menu/bottom_nav"
-        app:labelVisibilityMode="labeled" />
+        app:labelVisibilityMode="labeled"
+        app:elevation="0dp" />
 </LinearLayout>

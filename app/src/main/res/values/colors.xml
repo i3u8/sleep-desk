@@ -1,11 +1,19 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <color name="bg">#FF0F172A</color>
-    <color name="nav_bg">#FF1E293B</color>
-    <color name="card_bg">#FF1E293B</color>
+    <color name="bg">#FF0B1220</color>
+    <color name="nav_bg">#FF121A2B</color>
+    <color name="card_bg">#FF152036</color>
+    <color name="surface_elevated">#FF1A2740</color>
+    <color name="card_stroke">#33A5B4D4</color>
     <color name="on_bg">#FFF1F5F9</color>
     <color name="muted">#FF94A3B8</color>
-    <color name="start_green">#FF16A34A</color>
-    <color name="stop_red">#FFDC2626</color>
-    <color name="ic_launcher_bg">#FF1E293B</color>
+    <color name="accent">#FF7C9CFF</color>
+    <color name="accent_dim">#FF3D4F8C</color>
+    <color name="start_green">#FF22C55E</color>
+    <color name="stop_red">#FFEF4444</color>
+    <color name="warning">#FFFBBF24</color>
+    <color name="ripple">#337C9CFF</color>
+    <color name="nav_indicator">#337C9CFF</color>
+    <color name="ic_launcher_bg">#FF152036</color>
+    <color name="bar_fill">#FF4ADE80</color>
 </resources>

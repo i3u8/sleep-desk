@@ -1,11 +1,50 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <style name="Theme.SleepDesk" parent="Theme.MaterialComponents.DayNight.NoActionBar">
-        <item name="colorPrimary">@color/start_green</item>
-        <item name="colorPrimaryVariant">@color/bg</item>
+    <style name="Theme.SleepDesk" parent="Theme.Material3.Dark.NoActionBar">
+        <item name="colorPrimary">@color/accent</item>
         <item name="colorOnPrimary">@android:color/white</item>
+        <item name="colorPrimaryContainer">@color/accent_dim</item>
+        <item name="colorOnPrimaryContainer">@color/on_bg</item>
+        <item name="colorSecondary">@color/start_green</item>
+        <item name="colorOnSecondary">@android:color/white</item>
+        <item name="colorSurface">@color/card_bg</item>
+        <item name="colorOnSurface">@color/on_bg</item>
+        <item name="colorOnSurfaceVariant">@color/muted</item>
+        <item name="android:colorBackground">@color/bg</item>
+        <item name="colorOutline">@color/card_stroke</item>
         <item name="android:statusBarColor">@color/bg</item>
-        <item name="android:navigationBarColor">@color/bg</item>
+        <item name="android:navigationBarColor">@color/nav_bg</item>
         <item name="android:windowBackground">@color/bg</item>
+        <item name="bottomSheetDialogTheme">@style/ThemeOverlay.SleepDesk.BottomSheet</item>
+    </style>
+
+    <style name="ThemeOverlay.SleepDesk.BottomSheet" parent="ThemeOverlay.Material3.BottomSheetDialog">
+        <item name="bottomSheetStyle">@style/Widget.SleepDesk.BottomSheet</item>
+    </style>
+
+    <style name="Widget.SleepDesk.BottomSheet" parent="Widget.Material3.BottomSheet.Modal">
+        <item name="backgroundTint">@color/card_bg</item>
+        <item name="shapeAppearance">@style/ShapeAppearance.SleepDesk.Large</item>
+    </style>
+
+    <style name="ShapeAppearance.SleepDesk.Large" parent="ShapeAppearance.Material3.LargeComponent">
+        <item name="cornerFamily">rounded</item>
+        <item name="cornerSize">24dp</item>
+    </style>
+
+    <style name="Widget.SleepDesk.SleepButton" parent="Widget.Material3.Button">
+        <item name="android:textAllCaps">false</item>
+        <item name="android:textSize">28sp</item>
+        <item name="android:textStyle">bold</item>
+        <item name="android:textColor">@android:color/white</item>
+        <item name="backgroundTint">@color/start_green</item>
+        <item name="rippleColor">#40FFFFFF</item>
+        <item name="elevation">6dp</item>
+    </style>
+
+    <style name="Widget.SleepDesk.BottomNavIndicator" parent="Widget.Material3.BottomNavigationView.ActiveIndicator">
+        <item name="android:color">@color/nav_indicator</item>
+        <item name="android:width">64dp</item>
+        <item name="android:height">32dp</item>
     </style>
 </resources>

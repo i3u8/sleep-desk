@@ -62,15 +62,23 @@ class HistoryFragment : Fragment() {
                 )
             }
         )
-        list.adapter = HistoryAdapter(history)
+        list.adapter = HistoryAdapter(history) { session ->
+            (parentFragmentManager.findFragmentByTag(SessionDetailBottomSheet.TAG) as? SessionDetailBottomSheet)
+                ?.dismissAllowingStateLoss()
+            SessionDetailBottomSheet.newInstance(session.id)
+                .show(parentFragmentManager, SessionDetailBottomSheet.TAG)
+        }
     }
 
-    private class HistoryAdapter(private val items: List<SleepSession>) :
-        RecyclerView.Adapter<HistoryAdapter.VH>() {
+    private class HistoryAdapter(
+        private val items: List<SleepSession>,
+        private val onClick: (SleepSession) -> Unit
+    ) : RecyclerView.Adapter<HistoryAdapter.VH>() {
 
         class VH(v: View) : RecyclerView.ViewHolder(v) {
             val title: TextView = v.findViewById(R.id.tvItemTitle)
             val detail: TextView = v.findViewById(R.id.tvItemDetail)
+            val badge: TextView = v.findViewById(R.id.tvItemBadge)
         }
 
         override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): VH {
@@ -100,6 +108,8 @@ class HistoryFragment : Fragment() {
                 s.countByType(NightEventType.SNORE),
                 s.countByType(NightEventType.COUGH) + s.countByType(NightEventType.NIGHT_WAKE_SOUND)
             )
+            holder.badge.text = ctx.getString(R.string.history_tap_events, s.events.size)
+            holder.itemView.setOnClickListener { onClick(s) }
         }
     }
 }

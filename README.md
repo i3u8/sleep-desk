@@ -2,9 +2,16 @@
 
 Android sleep tracker — **microphone ambient monitoring** (no bedside placement required), one-tap start/stop, local-only.
 
-**Package:** `com.i3u8.sleepdesk` · **v0.2.0** · MIT
+**Package:** `com.i3u8.sleepdesk` · **v0.2.1** · MIT
 
-## What’s new in v0.2
+## What’s new in v0.2.1
+
+- **Tap any event row** → bottom sheet with type, time, Play/Pause of the saved AAC clip under `filesDir`
+- Missing clip → clear message; playback stops on dismiss / other play / pause
+- **Material 3** dark UI: big circular sleep button, tonight stats cards, readable history cards + chart
+- Still two tabs **首页 / 历史**, one-tap start/stop
+
+## What’s in v0.2
 
 - **Primary signal = microphone** via foreground service (`FOREGROUND_SERVICE_MICROPHONE`)
 - Continuous low-cost energy / VAD-style gate → rule classifier (`SNORE` / `COUGH` / `SPEECH` / `NIGHT_WAKE_SOUND` / …)
@@ -19,7 +26,7 @@ Android sleep tracker — **microphone ambient monitoring** (no bedside placemen
 1. Phone can stay on the nightstand / charger — **not** on the mattress.
 2. Tap **开始睡** → grant **microphone** (and notifications on Android 13+).
 3. Leave the app; ongoing notification keeps ambient monitoring.
-4. Morning: tap **结束** → see duration + event / clip counts on 首页; past nights on 历史.
+4. Morning: tap **结束** → see tonight stats + event list on 首页; tap an event to replay its clip. Past nights on 历史 (tap a card → event list).
 
 ## Build
 
@@ -44,8 +51,11 @@ echo "sdk.dir=/path/to/Android/Sdk" > local.properties
 
 ```
 MainActivity (BottomNav: 首页 / 历史)
-  ├─ HomeFragment — one-tap start/stop, live / last summary
-  └─ HistoryFragment — Canvas duration bars + session list
+  ├─ HomeFragment — big sleep button, tonight stats, tappable event rows
+  └─ HistoryFragment — Canvas duration bars + session cards → event list
+
+EventDetailBottomSheet — type / time / Play-Pause via ClipPlayer (MediaPlayer)
+SessionDetailBottomSheet — night’s events
 
 SleepTrackingService (FGS microphone)
   ├─ NightAudioEngineImpl  ← docs/audio-algo.md

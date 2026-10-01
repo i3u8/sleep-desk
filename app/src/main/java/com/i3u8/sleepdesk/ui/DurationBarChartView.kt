@@ -24,7 +24,7 @@ class DurationBarChartView @JvmOverloads constructor(
 
     private var bars: List<Bar> = emptyList()
     private val barPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = ContextCompat.getColor(context, R.color.start_green)
+        color = ContextCompat.getColor(context, R.color.bar_fill)
         style = Paint.Style.FILL
     }
     private val labelPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
@@ -68,17 +68,16 @@ class DurationBarChartView @JvmOverloads constructor(
         val chartW = width - padL - padR
         val chartH = height - padT - padB
         val maxH = max(bars.maxOf { it.hours }, 1f)
-        val gap = 12f
+        val gap = 10f
         val barW = ((chartW - gap * (bars.size - 1)) / bars.size).coerceAtLeast(8f)
 
-        // baseline
         canvas.drawLine(padL, padT + chartH, padL + chartW, padT + chartH, axisPaint)
 
         bars.forEachIndexed { i, bar ->
             val left = padL + i * (barW + gap)
             val h = (bar.hours / maxH) * chartH
             rect.set(left, padT + chartH - h, left + barW, padT + chartH)
-            canvas.drawRoundRect(rect, 10f, 10f, barPaint)
+            canvas.drawRoundRect(rect, 12f, 12f, barPaint)
             val cx = left + barW / 2f
             canvas.drawText(bar.label, cx, height - 12f, labelPaint)
             val v = if (bar.hours >= 1f) "%.1fh".format(bar.hours) else "%dm".format((bar.hours * 60).toInt())
