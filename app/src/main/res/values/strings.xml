@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Sleep Desk</string>
+    <string name="btn_start">开始睡</string>
+    <string name="btn_stop">结束</string>
+    <string name="status_idle">准备就绪 · Ready</string>
+    <string name="status_tracking">记录中 · Tracking…</string>
+    <string name="hint_place_phone">把手机放在床垫或床边，点「开始睡」。\nPlace the phone on the mattress/edge, tap Start.</string>
+    <string name="summary_running">开始 %1$s · 已睡 %2$s\n已采样 %3$d 分钟 · 高动作 %4$d</string>
+    <string name="summary_last">上次：%1$s → %2$s\n时长 %3$s · 高动作桶 %4$d / %5$d\n(高动作 ≈ 夜间醒来代理)</string>
+    <string name="duration_hm">%1$d小时%2$d分</string>
+    <string name="notif_channel">睡眠追踪</string>
+    <string name="notif_tracking">正在记录床边动作…</string>
+</resources>
