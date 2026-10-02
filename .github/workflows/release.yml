@@ -21,7 +21,6 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
         with:
-          # For tag pushes, fetch the tag; for dispatch with tag input, still checkout default ref
           fetch-depth: 0
 
       - name: Resolve release tag
@@ -33,7 +32,6 @@ jobs:
           elif [ -n "${{ inputs.tag }}" ]; then
             TAG="${{ inputs.tag }}"
             CREATE_RELEASE=true
-            # Ensure tag exists locally / checkout that ref if remote has it
             git fetch origin "refs/tags/${TAG}:refs/tags/${TAG}" 2>/dev/null || true
             if git rev-parse "refs/tags/${TAG}" >/dev/null 2>&1; then
               git checkout "refs/tags/${TAG}"
@@ -58,6 +56,8 @@ jobs:
 
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
+        with:
+          packages: platform-tools platforms;android-34 build-tools;34.0.0
 
       - name: Make gradlew executable
         run: chmod +x gradlew
