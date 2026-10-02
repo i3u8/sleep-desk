@@ -1,6 +1,7 @@
 # Sleep Desk / 睡眠桌面
 
-[![Release](https://img.shields.io/github/v/release/i3u8/sleep-desk?include_prereleases&sort=semver)](https://github.com/i3u8/sleep-desk/releases)
+[![CI](https://github.com/redreamality/sleep-desk/actions/workflows/android.yml/badge.svg)](https://github.com/redreamality/sleep-desk/actions/workflows/android.yml)
+[![Release](https://img.shields.io/github/v/release/redreamality/sleep-desk?include_prereleases&sort=semver)](https://github.com/redreamality/sleep-desk/releases)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 **English** · [中文](#sleep-desk--睡眠桌面-中文)
@@ -10,7 +11,7 @@ Minimal Android sleep tracker driven by the **microphone** (phone can stay on th
 | | |
 |---|---|
 | **Package** | `com.i3u8.sleepdesk` |
-| **Latest** | [v0.3.1](https://github.com/i3u8/sleep-desk/releases/tag/v0.3.1) |
+| **Latest** | [v0.3.1](https://github.com/redreamality/sleep-desk/releases/tag/v0.3.1) |
 | **License** | [MIT](LICENSE) |
 | **Docs** | [`docs/`](docs/) |
 
@@ -35,11 +36,19 @@ Phone on the nightstand is enough. Secondary signals (screen / charge / light) a
 
 ## Install (from Releases)
 
-1. Open **[Releases](https://github.com/i3u8/sleep-desk/releases)** and download the latest debug APK (e.g. `sleep-desk-v0.3.1-debug.apk`).
+1. Open **[Releases](https://github.com/redreamality/sleep-desk/releases)** and download the latest debug APK (e.g. `sleep-desk-v0.3.1-debug.apk`).
 2. On Android, allow install from the browser / file manager.
 3. Grant **microphone** (and notifications on Android 13+) when you tap **开始睡**.
 
 Side-load only; not on Play Store yet.
+
+
+## How to get CI APK
+
+- **Actions (every push/PR to `main`):** open [Actions](https://github.com/redreamality/sleep-desk/actions/workflows/android.yml) → latest successful **Android CI** run → download artifact `sleep-desk-debug` (APK named with short commit SHA).
+- **Releases (tagged builds):** open [Releases](https://github.com/redreamality/sleep-desk/releases) for APKs attached to `v*` tags (e.g. `sleep-desk-v0.3.1-debug.apk`).
+
+To cut a release: `git tag vX.Y.Z && git push origin vX.Y.Z` (triggers the Release workflow). You can also run **Release** via `workflow_dispatch` with an optional tag input.
 
 ## How to use
 
@@ -51,7 +60,7 @@ Side-load only; not on Play Store yet.
 ## Build with Gradle
 
 ```bash
-git clone https://github.com/i3u8/sleep-desk.git
+git clone https://github.com/redreamality/sleep-desk.git
 cd sleep-desk
 echo "sdk.dir=/path/to/Android/Sdk" > local.properties
 ./gradlew assembleDebug
@@ -99,7 +108,8 @@ MIT — see [LICENSE](LICENSE).
 
 ## Sleep Desk / 睡眠桌面 (中文)
 
-[![Release](https://img.shields.io/github/v/release/i3u8/sleep-desk?include_prereleases&sort=semver)](https://github.com/i3u8/sleep-desk/releases)
+[![CI](https://github.com/redreamality/sleep-desk/actions/workflows/android.yml/badge.svg)](https://github.com/redreamality/sleep-desk/actions/workflows/android.yml)
+[![Release](https://img.shields.io/github/v/release/redreamality/sleep-desk?include_prereleases&sort=semver)](https://github.com/redreamality/sleep-desk/releases)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 用**麦克风**做夜间环境音监测的极简 Android 睡眠记录工具（手机可放床头柜，不必压在床垫上）。一键开始/结束，段式时间线，关键事件短片段，**全部本地存储**。
@@ -107,7 +117,7 @@ MIT — see [LICENSE](LICENSE).
 | | |
 |---|---|
 | **包名** | `com.i3u8.sleepdesk` |
-| **最新版** | [v0.3.1](https://github.com/i3u8/sleep-desk/releases/tag/v0.3.1) |
+| **最新版** | [v0.3.1](https://github.com/redreamality/sleep-desk/releases/tag/v0.3.1) |
 | **许可证** | [MIT](LICENSE) |
 | **文档** | [`docs/`](docs/) |
 
@@ -130,11 +140,19 @@ MIT — see [LICENSE](LICENSE).
 
 ### 安装（Releases）
 
-1. 打开 **[Releases](https://github.com/i3u8/sleep-desk/releases)**，下载最新 debug APK（如 `sleep-desk-v0.3.1-debug.apk`）。
+1. 打开 **[Releases](https://github.com/redreamality/sleep-desk/releases)**，下载最新 debug APK（如 `sleep-desk-v0.3.1-debug.apk`）。
 2. 在 Android 上允许来自浏览器/文件管理器的安装。
 3. 点击 **开始睡** 时授予**麦克风**（Android 13+ 还需通知权限）。
 
 目前仅侧载，尚未上架应用商店。
+
+
+### 获取 CI APK
+
+- **Actions（每次 push/PR 到 `main`）：** 打开 [Actions](https://github.com/redreamality/sleep-desk/actions/workflows/android.yml) → 最近一次成功的 **Android CI** → 下载产物 `sleep-desk-debug`（文件名含短 SHA）。
+- **Releases（打标签构建）：** 打开 [Releases](https://github.com/redreamality/sleep-desk/releases) 下载挂在 `v*` 标签上的 APK（如 `sleep-desk-v0.3.1-debug.apk`）。
+
+发版：`git tag vX.Y.Z && git push origin vX.Y.Z`（触发 Release 工作流）。也可在 Actions 里手动跑 **Release**（可选填写 tag）。
 
 ### 使用
 
@@ -146,7 +164,7 @@ MIT — see [LICENSE](LICENSE).
 ### 用 Gradle 构建
 
 ```bash
-git clone https://github.com/i3u8/sleep-desk.git
+git clone https://github.com/redreamality/sleep-desk.git
 cd sleep-desk
 echo "sdk.dir=/path/to/Android/Sdk" > local.properties
 ./gradlew assembleDebug

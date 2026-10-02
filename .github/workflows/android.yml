@@ -1,0 +1,46 @@
+name: Android CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+          cache: gradle
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Make gradlew executable
+        run: chmod +x gradlew
+
+      - name: Assemble debug APK
+        run: ./gradlew assembleDebug --no-daemon
+
+      - name: Rename APK with short SHA
+        run: |
+          SHORT_SHA="${GITHUB_SHA::7}"
+          SRC=$(ls app/build/outputs/apk/debug/*.apk | head -n1)
+          DEST="app/build/outputs/apk/debug/sleep-desk-debug-${SHORT_SHA}.apk"
+          cp "$SRC" "$DEST"
+          echo "APK_PATH=$DEST" >> "$GITHUB_ENV"
+          ls -la app/build/outputs/apk/debug/
+
+      - name: Upload debug APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: sleep-desk-debug
+          path: app/build/outputs/apk/debug/sleep-desk-debug-*.apk
+          if-no-files-found: error
