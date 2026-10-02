@@ -234,6 +234,7 @@ class SessionStore(context: Context) {
                     .put("clipRelativePath", e.clipRelativePath ?: JSONObject.NULL)
                     .put("note", e.note ?: JSONObject.NULL)
                     .put("algoVersion", e.algoVersion ?: JSONObject.NULL)
+                    .put("features", JSONObject(e.features.filterValues { it.isFinite() }))
             )
         }
         o.put("events", arr)
@@ -313,6 +314,14 @@ class SessionStore(context: Context) {
         val arr = o.optJSONArray("events") ?: o.optJSONArray("audioEvents") ?: JSONArray()
         for (i in 0 until arr.length()) {
             val e = arr.getJSONObject(i)
+            val featureJson = e.optJSONObject("features")
+            val features = mutableMapOf<String, Float>()
+            if (featureJson != null) {
+                for (key in featureJson.keys()) {
+                    val value = featureJson.optDouble(key, Double.NaN).toFloat()
+                    if (value.isFinite()) features[key] = value
+                }
+            }
             events.add(
                 SleepEvent(
                     id = e.optString("id", UUID.randomUUID().toString()),
@@ -323,7 +332,8 @@ class SessionStore(context: Context) {
                     confidence = e.optDouble("confidence", 1.0).toFloat(),
                     clipRelativePath = if (e.isNull("clipRelativePath")) null else e.optString("clipRelativePath"),
                     note = if (e.isNull("note")) null else e.optString("note"),
-                    algoVersion = if (e.isNull("algoVersion")) null else e.optString("algoVersion")
+                    algoVersion = if (e.isNull("algoVersion")) null else e.optString("algoVersion"),
+                    features = features
                 )
             )
         }

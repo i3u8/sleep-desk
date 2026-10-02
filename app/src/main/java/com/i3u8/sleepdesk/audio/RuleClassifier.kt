@@ -1,66 +1,90 @@
 package com.i3u8.sleepdesk.audio
 
 /**
- * v1.1 rule classifier — relaxed thresholds (prefer recall over precision).
- * @see docs/audio-algo.md §3.4
+ * Conservative acoustic rules, not sleep-state detection.
+ * Scores express rule support, not calibrated probabilities.
  */
 object RuleClassifier {
-    fun classify(f: ClipFeatures, screenOnNearby: Boolean): Pair<NightEventType, Float> {
-        // Snore — lower periodicity / shorter bout OK (distant, soft snore)
-        if (f.periodicity >= 0.32f &&
-            f.periodSec in 0.35f..3.5f &&
-            f.bandHigh < 0.42f &&
-            f.durationMs >= 800f
-        ) {
-            val conf = (0.40f + 0.4f * f.periodicity + 0.1f * (1f - f.bandHigh))
-                .coerceIn(0.42f, 0.95f)
-            return NightEventType.SNORE to conf
-        }
+    const val VERSION = "audio-v1.3"
 
-        // Cough
-        if (f.durationMs in 60f..700f &&
-            f.attackMs < 120f &&
-            (f.spectralCentroid > 1200f || f.bandHigh > 0.22f)
+    fun classify(
+        f: ClipFeatures,
+        screenOnNearby: Boolean,
+        noiseFloorDb: Float? = null
+    ): Pair<NightEventType, Float> {
+        if (f.toMap().values.any { !it.isFinite() } ||
+            (noiseFloorDb != null && !noiseFloorDb.isFinite()) ||
+            f.durationMs < 150f || f.rmsDb < -80f || f.peakDb < f.rmsDb
         ) {
-            val conf = 0.52f + 0.2f * (1f - f.attackMs / 120f).coerceIn(0f, 1f)
-            return NightEventType.COUGH to conf.coerceIn(0.42f, 0.92f)
+            return NightEventType.FALSE_TRIGGER to 0.2f
         }
-
-        // Speech (coarse)
-        if (f.durationMs in 300f..8000f &&
-            f.bandMid > 0.22f &&
-            f.periodicity < 0.40f &&
-            f.spectralCentroid in 350f..4000f
-        ) {
-            var conf = 0.50f + 0.18f * f.bandMid
-            if (screenOnNearby) conf += 0.08f
-            return NightEventType.SPEECH to conf.coerceIn(0.42f, 0.9f)
+        val snrDb = noiseFloorDb?.let { f.rmsDb - it }
+        if (snrDb != null && snrDb < 3f) {
+            return NightEventType.FALSE_TRIGGER to 0.25f
         }
+        val crestDb = f.peakDb - f.rmsDb
 
-        // ENV_NOISE: elevated but smooth / long / low periodicity
-        if (f.durationMs >= 3500f &&
-            f.attackMs > 250f &&
-            f.periodicity < 0.28f &&
-            f.zcrStd < 0.05f
-        ) {
+        // Stationary fans and tones are not speech merely because of their mid band.
+        if (f.envelopeVariation < 0.12f && f.spectralFlux < 0.06f) {
             return NightEventType.ENV_NOISE to 0.65f
         }
 
-        // Abnormal: very loud peak + high centroid
-        if (f.peakDb > -20f && f.spectralCentroid > 2200f) {
-            return NightEventType.ABNORMAL to 0.72f
+        if (f.periodicity >= 0.55f &&
+            f.periodSec in 0.45f..3f &&
+            f.durationMs >= 2f * f.periodSec * 1000f &&
+            f.bandHigh < 0.35f &&
+            f.spectralFlatness < 0.45f &&
+            f.envelopeVariation >= 0.18f
+        ) {
+            val score = 0.45f + 0.35f * f.periodicity + 0.1f * (1f - f.bandHigh)
+            return NightEventType.SNORE to score.coerceIn(0.55f, 0.9f)
         }
 
-        // Short junk only if truly tiny
-        if (f.durationMs < 80f) {
-            return NightEventType.FALSE_TRIGGER to 0.2f
+        // A high-frequency click alone is insufficient evidence of a cough.
+        if (f.durationMs in 150f..900f &&
+            f.attackMs in 10f..100f &&
+            crestDb >= 10f &&
+            f.envelopeVariation >= 0.35f &&
+            f.spectralFlux >= 0.08f &&
+            f.spectralFlatness >= 0.08f &&
+            f.bandHigh > 0.20f &&
+            f.spectralCentroid > 1100f
+        ) {
+            return NightEventType.COUGH to
+                (0.55f + 0.15f * (1f - f.attackMs / 120f)).coerceIn(0.55f, 0.75f)
         }
 
-        // Default night-wake-ish burst (catch-all for distant rustle / sit-up)
-        var conf = 0.50f
-        if (screenOnNearby) conf += 0.1f
-        if (f.peakDb > -32f) conf += 0.06f
-        if (f.durationMs >= 200f) conf += 0.04f
-        return NightEventType.NIGHT_WAKE_SOUND to conf.coerceIn(0.42f, 0.88f)
+        // Require spectral AND temporal variation, not one mid-band FFT window.
+        // Speech-like acoustics cannot establish a speaker's identity or dreaming.
+        if (f.durationMs in 450f..8000f &&
+            f.bandMid >= 0.35f &&
+            f.bandHigh < 0.60f &&
+            f.periodicity < 0.45f &&
+            f.spectralCentroid in 250f..3500f &&
+            f.zcrMean in 0.01f..0.30f &&
+            f.spectralFlatness < 0.50f &&
+            f.spectralFlux >= 0.06f &&
+            f.envelopeVariation >= 0.12f
+        ) {
+            return NightEventType.SPEECH to
+                (0.50f + 0.15f * f.bandMid + 0.10f * f.spectralFlux).coerceIn(0.55f, 0.8f)
+        }
+
+        // Absolute peaks depend on microphone sensitivity and digital gain.
+        if (snrDb != null && snrDb >= 15f &&
+            f.peakDb > -12f && f.rmsDb > -28f &&
+            f.spectralCentroid > 2200f && f.bandHigh > 0.40f
+        ) {
+            return NightEventType.ABNORMAL to 0.65f
+        }
+
+        if (screenOnNearby && f.durationMs >= 250f &&
+            f.envelopeVariation >= 0.20f && crestDb >= 6f
+        ) {
+            return NightEventType.NIGHT_WAKE_SOUND to 0.55f
+        }
+
+        // Unidentified ambient activity is not evidence that the sleeper woke up.
+        return NightEventType.ENV_NOISE to 0.45f
     }
 }

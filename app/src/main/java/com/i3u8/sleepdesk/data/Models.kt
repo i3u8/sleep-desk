@@ -16,7 +16,8 @@ data class SleepEvent(
     val confidence: Float = 1f,
     val clipRelativePath: String? = null,
     val note: String? = null,
-    val algoVersion: String? = null
+    val algoVersion: String? = null,
+    val features: Map<String, Float> = emptyMap()
 ) {
     companion object {
         fun fromNightEvent(e: NightEvent): SleepEvent = SleepEvent(
@@ -24,11 +25,14 @@ data class SleepEvent(
             timeMs = e.startMs,
             endMs = e.endMs,
             type = e.type.name,
-            peakLevel = (e.features["peakDb"] ?: e.features["rmsDb"] ?: 0f).toDouble(),
+            peakLevel = (e.features["peakDb"]?.takeIf { it.isFinite() }
+                ?: e.features["rmsDb"]?.takeIf { it.isFinite() } ?: 0f).toDouble(),
             confidence = e.confidence,
             clipRelativePath = e.clipRelativePath,
-            note = e.features["periodSec"]?.let { "period=${"%.2f".format(it)}s" },
-            algoVersion = e.algoVersion
+            note = e.features["periodSec"]?.takeIf { it.isFinite() }
+                ?.let { "period=${"%.2f".format(it)}s" },
+            algoVersion = e.algoVersion,
+            features = e.features.filterValues { it.isFinite() }
         )
 
         const val TYPE_SCREEN_ON = "SCREEN_ON"

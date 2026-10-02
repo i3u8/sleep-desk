@@ -4,6 +4,7 @@ import android.content.Context
 import android.media.AudioFormat
 import android.media.AudioRecord
 import android.media.MediaRecorder
+import android.os.SystemClock
 import android.util.Log
 import java.util.ArrayDeque
 import java.util.UUID
@@ -28,24 +29,15 @@ class NightAudioEngineImpl(
     @Volatile private var config = AudioAlgoConfig()
     @Volatile private var sessionId: String = ""
     @Volatile private var screenOnNearby = false
-    @Volatile private var lastScreenChangeMs = 0L
+    @Volatile private var lastScreenChangeMs: Long? = null
 
-    private val floorWindow = ArrayDeque<Float>()
-    private var noiseFloor = -58f
-    private var smoothedDb = -60f
-
-    private var inCandidate = false
-    private var candidateStartSample = 0L
-    private var candidateStartMs = 0L
-    private var overCount = 0
-    private var underCount = 0
-    private var lastSnoreClipMs = 0L
-    private var lastSnoreEventMs = 0L
+    private var lastSnoreClipMs: Long? = null
+    private var lastSnoreEventMs: Long? = null
     private var sessionStartMs = 0L
     private val hourlyClipCounts = HashMap<NightEventType, Int>()
     private var hourBucket = 0L
 
-    private lateinit var ring: PcmRingBuffer
+    private lateinit var detector: CandidateDetector
 
     override fun setListener(listener: NightAudioListener?) {
         this.listener = listener
@@ -55,7 +47,7 @@ class NightAudioEngineImpl(
 
     override fun onAuxScreenChanged(isOn: Boolean) {
         screenOnNearby = isOn
-        lastScreenChangeMs = System.currentTimeMillis()
+        lastScreenChangeMs = SystemClock.elapsedRealtime()
     }
 
     override fun start(sessionId: String, config: AudioAlgoConfig) {
@@ -63,15 +55,9 @@ class NightAudioEngineImpl(
         this.sessionId = sessionId
         this.config = config
         this.sessionStartMs = System.currentTimeMillis()
-        ring = PcmRingBuffer(config.sampleRate * 6)
-        floorWindow.clear()
-        noiseFloor = -58f
-        smoothedDb = -60f
-        inCandidate = false
-        overCount = 0
-        underCount = 0
-        lastSnoreClipMs = 0L
-        lastSnoreEventMs = 0L
+        detector = CandidateDetector(config)
+        lastSnoreClipMs = null
+        lastSnoreEventMs = null
         hourlyClipCounts.clear()
         hourBucket = 0L
 
@@ -109,12 +95,13 @@ class NightAudioEngineImpl(
 
         try {
             recorder.startRecording()
+            sessionStartMs = System.currentTimeMillis()
             Log.i(TAG, "recording source=$source margin=${config.effectiveMarginDb()} sens=${config.sensitivity}")
             while (running.get()) {
                 val n = recorder.read(hop, 0, hopSamples)
                 if (n <= 0) continue
 
-                if (!probed && !inCandidate) {
+                if (!probed && !detector.inCandidate) {
                     val rms = FeatureExtractor.rmsDb(hop, n)
                     probeLevels.addLast(rms)
                     if (probeLevels.size >= probeHops) {
@@ -129,7 +116,7 @@ class NightAudioEngineImpl(
                             source = MediaRecorder.AudioSource.MIC
                             recorder = openRecorder(source, sr) ?: return
                             recorder.startRecording()
-                            floorWindow.clear()
+                            detector.resetNoiseFloor()
                             probeLevels.clear()
                         }
                         probed = true
@@ -144,7 +131,6 @@ class NightAudioEngineImpl(
             } catch (_: Exception) {
             }
             recorder.release()
-            inCandidate = false
         }
     }
 
@@ -188,56 +174,9 @@ class NightAudioEngineImpl(
 
     private fun processHop(frame: ShortArray, count: Int) {
         applyDigitalGain(frame, count, config.digitalGainDb)
-        val before = ring.totalSamples()
-        ring.write(frame, 0, count)
-        val hopStartSample = before
-        val now = System.currentTimeMillis()
-
-        val rms = FeatureExtractor.rmsDb(frame, count)
-        val smoothMs = config.energySmoothMs.coerceAtLeast(100).toFloat()
-        val alpha = (config.hopMs / smoothMs).coerceIn(0.03f, 0.5f)
-        smoothedDb = smoothedDb * (1 - alpha) + rms * alpha
-
-        val margin = config.effectiveMarginDb()
-        val over = smoothedDb > noiseFloor + margin
-
-        if (!inCandidate) {
-            updateNoiseFloor(rms)
-            if (over) {
-                overCount++
-                // Enter sooner: ~half of minCandidate for gate open (recall)
-                val need = ((config.minCandidateMs / 2) / config.hopMs).coerceAtLeast(1)
-                if (overCount >= need) {
-                    if (now - sessionStartMs < config.sessionWarmupMs) {
-                        overCount = 0
-                    } else {
-                        inCandidate = true
-                        candidateStartSample = hopStartSample - overCount.toLong() * count
-                        candidateStartMs = now - overCount.toLong() * config.hopMs
-                        underCount = 0
-                    }
-                }
-            } else {
-                overCount = 0
-            }
-        } else {
-            if (!over || smoothedDb < noiseFloor + margin * 0.45f) {
-                underCount++
-            } else {
-                underCount = 0
-            }
-            val elapsedMs = now - candidateStartMs
-            val endBySilence = underCount >= (100 / config.hopMs).coerceAtLeast(1)
-            val endByMax = elapsedMs >= config.maxCandidateMs
-            if (endBySilence || endByMax) {
-                val endSample = ring.totalSamples()
-                val endMs = now
-                finishCandidate(candidateStartSample, endSample, candidateStartMs, endMs)
-                inCandidate = false
-                overCount = 0
-                underCount = 0
-            }
-        }
+        val candidate = detector.process(frame, count)
+        listener?.onNoiseFloor(detector.noiseFloorDb)
+        if (candidate != null) finishCandidate(candidate)
     }
 
     /** Apply fixed software gain while softly saturating peaks; no system AGC is enabled. */
@@ -254,48 +193,23 @@ class NightAudioEngineImpl(
         }
     }
 
-    private fun updateNoiseFloor(rmsDb: Float) {
-        floorWindow.addLast(rmsDb)
-        val maxN = (config.floorWindowMs / config.hopMs).coerceAtLeast(100)
-        while (floorWindow.size > maxN) floorWindow.removeFirst()
-        if (floorWindow.size >= 30) {
-            val sorted = floorWindow.sorted()
-            val pct = config.floorPercentile.coerceIn(0.05f, 0.4f)
-            val idx = (sorted.size * pct).toInt().coerceIn(0, sorted.lastIndex)
-            noiseFloor = sorted[idx]
-            listener?.onNoiseFloor(noiseFloor)
-        }
-    }
-
-    private fun finishCandidate(startSample: Long, endSample: Long, startMs: Long, endMs: Long) {
+    private fun finishCandidate(candidate: CandidateAudio) {
         val sr = config.sampleRate
-        val pre = (config.preRollMs / 1000.0 * sr).toLong()
-        val post = (config.postRollMs / 1000.0 * sr).toLong()
-        val maxSamples = (config.maxClipMs / 1000.0 * sr).toLong()
-        var from = startSample - pre
-        var to = endSample + post
-        if (to - from > maxSamples) {
-            val mid = (startSample + endSample) / 2
-            from = mid - maxSamples / 2
-            to = from + maxSamples
-        }
-        val pcm = ring.sliceSamples(from, to)
-        if (pcm.isEmpty()) return
-
-        val durMs = (endMs - startMs).toFloat().coerceAtLeast(config.minCandidateMs.toFloat())
-        // Drop only ultra-short after silence merge
-        if (durMs < config.minCandidateMs * 0.6f) return
-
-        val feats = FeatureExtractor.extract(pcm, sr, durMs)
-        val nearScreen = screenOnNearby || (System.currentTimeMillis() - lastScreenChangeMs < 30_000L)
-        val (type, conf) = RuleClassifier.classify(feats, nearScreen)
+        val startMs = candidate.startMs(sessionStartMs, sr)
+        val endMs = candidate.endMs(sessionStartMs, sr)
+        val durationMs = candidate.pcm.size * 1000f / sr
+        val feats = FeatureExtractor.extract(candidate.pcm, sr, durationMs)
+        val nearScreen = screenOnNearby || (lastScreenChangeMs?.let {
+            SystemClock.elapsedRealtime() - it < 30_000L
+        } ?: false)
+        val (type, conf) = RuleClassifier.classify(feats, nearScreen, candidate.noiseFloorDb)
 
         if (type == NightEventType.FALSE_TRIGGER || conf < config.confidenceFloor) return
 
         if (type == NightEventType.SNORE) {
-            val now = System.currentTimeMillis()
-            if (now - lastSnoreEventMs < config.snoreMergeMs) {
-                if (now - lastSnoreClipMs < config.snoreClipIntervalMs) return
+            val now = candidate.endSample * 1000 / sr
+            if (lastSnoreEventMs?.let { now - it < config.snoreMergeMs } == true) {
+                if (lastSnoreClipMs?.let { now - it < config.snoreClipIntervalMs } == true) return
             }
             lastSnoreEventMs = now
         }
@@ -304,11 +218,11 @@ class NightAudioEngineImpl(
         var eventId = UUID.randomUUID().toString().replace("-", "").take(8)
         var clipPath: String? = null
 
-        if (saveClip && allowClipThisHour(type)) {
+        if (saveClip && allowClipThisHour(type, candidate.endSample)) {
             val encoded = clipStore.encodeAac(
                 sessionId = sessionId,
                 type = type,
-                pcm = pcm,
+                pcm = candidate.clipPcm,
                 sampleRate = sr,
                 bitrate = config.aacBitrate,
                 timeMs = startMs,
@@ -317,7 +231,7 @@ class NightAudioEngineImpl(
             if (encoded != null) {
                 eventId = encoded.first
                 clipPath = encoded.second
-                if (type == NightEventType.SNORE) lastSnoreClipMs = System.currentTimeMillis()
+                if (type == NightEventType.SNORE) lastSnoreClipMs = candidate.endSample * 1000 / sr
                 bumpHourly(type)
             }
         }
@@ -329,8 +243,11 @@ class NightAudioEngineImpl(
             endMs = endMs,
             confidence = conf,
             clipRelativePath = clipPath,
-            features = feats.toMap(),
-            algoVersion = "audio-v1.2"
+            features = feats.toMap() + mapOf(
+                "noiseFloorDb" to candidate.noiseFloorDb,
+                "snrDb" to (feats.rmsDb - candidate.noiseFloorDb)
+            ) + if (clipPath != null) candidate.clipFeatures(sr) else emptyMap(),
+            algoVersion = RuleClassifier.VERSION
         )
         listener?.onEvent(event)
     }
@@ -345,8 +262,8 @@ class NightAudioEngineImpl(
         NightEventType.FALSE_TRIGGER -> false
     }
 
-    private fun allowClipThisHour(type: NightEventType): Boolean {
-        val hour = System.currentTimeMillis() / 3_600_000L
+    private fun allowClipThisHour(type: NightEventType, endSample: Long): Boolean {
+        val hour = endSample / (config.sampleRate * 3_600L)
         if (hour != hourBucket) {
             hourBucket = hour
             hourlyClipCounts.clear()

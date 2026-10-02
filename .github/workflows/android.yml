@@ -28,8 +28,8 @@ jobs:
       - name: Make gradlew executable
         run: chmod +x gradlew
 
-      - name: Assemble debug APK
-        run: ./gradlew assembleDebug --no-daemon
+      - name: Test audio pipeline and assemble debug APK
+        run: ./gradlew testDebugUnitTest assembleDebug --no-daemon
 
       - name: Rename APK with short SHA
         run: |

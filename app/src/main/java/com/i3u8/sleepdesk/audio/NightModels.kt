@@ -12,12 +12,12 @@ data class NightEvent(
     val confidence: Float,
     val clipRelativePath: String? = null,
     val features: Map<String, Float> = emptyMap(),
-    val algoVersion: String = "audio-v1.2"
+    val algoVersion: String = RuleClassifier.VERSION
 )
 
 /**
- * Defaults lean **high sensitivity** (fewer misses, more false positives OK)
- * and favor far-desk / nightstand placement.
+ * The energy gate favors far-desk / nightstand placement. Classification
+ * separately rejects weak evidence instead of interpreting every burst as waking.
  */
 data class AudioAlgoConfig(
     val sampleRate: Int = 16_000,
@@ -28,6 +28,7 @@ data class AudioAlgoConfig(
     /** >1.0 = more sensitive (lower effective margin). Default high. */
     val sensitivity: Float = 1.25f,
     val preRollMs: Int = 2_000,
+    /** Reserved: synchronous clip saving currently includes no future post-roll. */
     val postRollMs: Int = 2_000,
     val maxClipMs: Int = 8_000,
     val minCandidateMs: Int = 150,
