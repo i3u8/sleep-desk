@@ -2,7 +2,13 @@
 
 Android sleep tracker — **microphone ambient monitoring** (no bedside placement required), one-tap start/stop, local-only.
 
-**Package:** `com.i3u8.sleepdesk` · **v0.3.0** · MIT
+**Package:** `com.i3u8.sleepdesk` · **v0.3.1** · MIT
+
+## What’s new in v0.3.1 — compat / perf / export
+
+- **Legacy sessions.json**: nights without `segments` still load fully; on open, auto-run SegmentBuilder and persist once (events never deleted)
+- **Perf**: History uses lightweight summaries; session detail defaults to segments + timeline (events lazy on expand); IO off main thread; timeline draw O(segments)
+- **Export**: 「导出本晚」/「导出全部」→ zip (sessions JSON + representative AAC clips) via system share sheet
 
 ## What’s new in v0.3.0 — 段式夜晚
 

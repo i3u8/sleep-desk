@@ -115,4 +115,14 @@
 
     <string name="history_item_detail_v03">时长 %1$d h %2$d m · 段 %3$d · 事件 %4$d · 片段 %5$d · 鼾 %6$d</string>
     <string name="history_tap_segments">查看段式时间轴 · %1$d 段 ›</string>
+
+    <!-- v0.3.1 compat / perf / export -->
+    <string name="export_one_night">导出本晚</string>
+    <string name="export_all_nights">导出全部</string>
+    <string name="export_share_title">分享睡眠导出</string>
+    <string name="export_preparing">正在打包导出…</string>
+    <string name="export_done">已导出 %1$d 晚 · %2$d 个片段</string>
+    <string name="export_failed">导出失败：%1$s</string>
+    <string name="history_item_menu_title">本晚操作</string>
+    <string name="history_long_press_hint_v031">点按查看段式时间轴 · 长按导出/删除</string>
 </resources>

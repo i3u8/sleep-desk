@@ -18,12 +18,16 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AlertDialog
 import androidx.core.content.ContextCompat
 import androidx.fragment.app.Fragment
+import androidx.lifecycle.lifecycleScope
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import com.google.android.material.button.MaterialButton
 import com.google.android.material.card.MaterialCardView
 import com.google.android.material.snackbar.Snackbar
 import com.i3u8.sleepdesk.R
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import com.i3u8.sleepdesk.SleepTrackingService
 import com.i3u8.sleepdesk.audio.NightEventType
 import com.i3u8.sleepdesk.data.SessionStore
@@ -145,37 +149,52 @@ class HomeFragment : Fragment() {
 
     private fun refreshUi() {
         if (!isAdded) return
-        val current = store.loadCurrent()
-        tracking = current != null
-        if (tracking) {
-            btnToggle.text = getString(R.string.btn_stop)
-            btnToggle.backgroundTintList = ContextCompat.getColorStateList(requireContext(), R.color.stop_red)
-            tvStatus.text = getString(R.string.status_tracking)
-            tvHint.visibility = View.GONE
-            rowLastActions.visibility = View.GONE
-            lastFinishedId = null
-            bindStats(current!!)
-            bindSegments(current, getString(R.string.segments_tonight))
-        } else {
-            btnToggle.text = getString(R.string.btn_start)
-            btnToggle.backgroundTintList = ContextCompat.getColorStateList(requireContext(), R.color.start_green)
-            tvStatus.text = getString(R.string.status_idle)
-            val last = store.loadLastFinished()
-            if (last != null) {
+        viewLifecycleOwner.lifecycleScope.launch {
+            val pair = withContext(Dispatchers.IO) {
+                val current = store.loadCurrent()
+                if (current != null) {
+                    current.ensureSegments()
+                    return@withContext current to null
+                }
+                val last = store.loadLastFinished()
+                if (last != null) {
+                    store.ensureSegmentsPersisted(last.id) ?: last.also { it.ensureSegments() }
+                    return@withContext null to (store.loadSession(last.id) ?: last)
+                }
+                null to null
+            }
+            if (!isAdded) return@launch
+            val (current, last) = pair
+            tracking = current != null
+            if (current != null) {
+                btnToggle.text = getString(R.string.btn_stop)
+                btnToggle.backgroundTintList = ContextCompat.getColorStateList(requireContext(), R.color.stop_red)
+                tvStatus.text = getString(R.string.status_tracking)
                 tvHint.visibility = View.GONE
-                lastFinishedId = last.id
-                rowLastActions.visibility = View.VISIBLE
-                bindStats(last)
-                bindSegments(last, getString(R.string.segments_last))
-            } else {
-                lastFinishedId = null
                 rowLastActions.visibility = View.GONE
-                cardStats.visibility = View.GONE
-                tvEventsTitle.visibility = View.GONE
-                rvEvents.visibility = View.GONE
-                tvEventsEmpty.visibility = View.GONE
-                tvHint.visibility = View.VISIBLE
-                tvHint.text = getString(R.string.hint_home)
+                lastFinishedId = null
+                bindStats(current)
+                bindSegments(current, getString(R.string.segments_tonight))
+            } else {
+                btnToggle.text = getString(R.string.btn_start)
+                btnToggle.backgroundTintList = ContextCompat.getColorStateList(requireContext(), R.color.start_green)
+                tvStatus.text = getString(R.string.status_idle)
+                if (last != null) {
+                    tvHint.visibility = View.GONE
+                    lastFinishedId = last.id
+                    rowLastActions.visibility = View.VISIBLE
+                    bindStats(last)
+                    bindSegments(last, getString(R.string.segments_last))
+                } else {
+                    lastFinishedId = null
+                    rowLastActions.visibility = View.GONE
+                    cardStats.visibility = View.GONE
+                    tvEventsTitle.visibility = View.GONE
+                    rvEvents.visibility = View.GONE
+                    tvEventsEmpty.visibility = View.GONE
+                    tvHint.visibility = View.VISIBLE
+                    tvHint.text = getString(R.string.hint_home)
+                }
             }
         }
     }
@@ -186,12 +205,15 @@ class HomeFragment : Fragment() {
             .setMessage(R.string.delete_confirm_msg)
             .setNegativeButton(R.string.action_cancel, null)
             .setPositiveButton(R.string.action_delete) { _, _ ->
-                val ok = store.deleteOne(sessionId)
-                if (ok) {
-                    Toast.makeText(requireContext(), R.string.delete_done, Toast.LENGTH_SHORT).show()
-                    refreshUi()
-                } else {
-                    Toast.makeText(requireContext(), R.string.delete_failed, Toast.LENGTH_SHORT).show()
+                viewLifecycleOwner.lifecycleScope.launch {
+                    val ok = withContext(Dispatchers.IO) { store.deleteOne(sessionId) }
+                    if (!isAdded) return@launch
+                    if (ok) {
+                        Toast.makeText(requireContext(), R.string.delete_done, Toast.LENGTH_SHORT).show()
+                        refreshUi()
+                    } else {
+                        Toast.makeText(requireContext(), R.string.delete_failed, Toast.LENGTH_SHORT).show()
+                    }
                 }
             }
             .show()

@@ -52,14 +52,30 @@
                     android:textColor="@color/muted" />
             </LinearLayout>
 
-            <com.google.android.material.button.MaterialButton
-                android:id="@+id/btnDeleteSession"
-                style="@style/Widget.Material3.Button.TextButton"
+            <LinearLayout
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:text="@string/btn_delete_night"
-                android:textColor="@color/stop_red"
-                android:textAllCaps="false" />
+                android:orientation="vertical"
+                android:gravity="end">
+
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/btnExportSession"
+                    style="@style/Widget.Material3.Button.TextButton"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="@string/export_one_night"
+                    android:textColor="@color/accent"
+                    android:textAllCaps="false" />
+
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/btnDeleteSession"
+                    style="@style/Widget.Material3.Button.TextButton"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="@string/btn_delete_night"
+                    android:textColor="@color/stop_red"
+                    android:textAllCaps="false" />
+            </LinearLayout>
         </LinearLayout>
 
         <TextView

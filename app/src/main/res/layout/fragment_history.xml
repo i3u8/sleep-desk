@@ -27,6 +27,15 @@
             android:textStyle="bold" />
 
         <com.google.android.material.button.MaterialButton
+            android:id="@+id/btnExportAll"
+            style="@style/Widget.Material3.Button.TextButton"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="@string/export_all_nights"
+            android:textColor="@color/accent"
+            android:textAllCaps="false" />
+
+        <com.google.android.material.button.MaterialButton
             android:id="@+id/btnClearAll"
             style="@style/Widget.Material3.Button.TextButton"
             android:layout_width="wrap_content"
@@ -81,7 +90,7 @@
     <TextView
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:text="@string/history_long_press_hint"
+        android:text="@string/history_long_press_hint_v031"
         android:textAppearance="?attr/textAppearanceLabelSmall"
         android:textColor="@color/muted"
         android:paddingBottom="6dp" />

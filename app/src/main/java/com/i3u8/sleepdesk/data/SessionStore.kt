@@ -7,59 +7,114 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
 import java.util.UUID
+import java.util.concurrent.atomic.AtomicReference
 
 /**
- * M1 local persistence: sessions.json with audio event index + clip relative paths.
+ * Local persistence: sessions.json with audio event index + clip relative paths.
  * Clips live under filesDir/audio_clips/ (written by AudioClipStore).
+ *
+ * v0.3.1: in-memory cache shared across instances, lightweight history summaries,
+ * and one-shot persist of materialized segments for pre-v0.3 JSON (legacy nights
+ * without a `segments` array). Legacy events are never deleted.
  */
 class SessionStore(context: Context) {
 
     private val appContext = context.applicationContext
     private val file = File(appContext.filesDir, "sessions.json")
     private val clipStore = AudioClipStore(appContext)
-    private val lock = Any()
 
     fun loadCurrent(): SleepSession? = synchronized(lock) {
-        val root = readRoot() ?: return null
-        if (!root.optBoolean("running", false)) return null
-        val cur = root.optJSONObject("current") ?: return null
-        parseSession(cur)
+        val root = cachedRoot() ?: return null
+        if (!root.running) return null
+        root.current
     }
 
     fun loadHistory(): List<SleepSession> = synchronized(lock) {
-        val root = readRoot() ?: return emptyList()
-        val arr = root.optJSONArray("history") ?: JSONArray()
-        val list = mutableListOf<SleepSession>()
-        for (i in 0 until arr.length()) list.add(parseSession(arr.getJSONObject(i)))
-        list.sortedByDescending { it.startMs }
+        val root = cachedRoot() ?: return emptyList()
+        root.history.sortedByDescending { it.startMs }
+    }
+
+    /**
+     * Lightweight rows for History list — O(sessions) after first parse;
+     * does not force SegmentBuilder on the UI thread for already-persisted segments.
+     * Materializes + persists missing segments for finished nights with audio events.
+     */
+    fun loadHistorySummaries(): List<SessionSummary> = synchronized(lock) {
+        val root = cachedRoot() ?: return emptyList()
+        var dirty = false
+        val out = mutableListOf<SessionSummary>()
+        for (s in root.history) {
+            val hadSegs = s.segments.isNotEmpty()
+            if (!hadSegs && s.audioEventCount() > 0) {
+                s.ensureSegments()
+                dirty = true
+            } else if (!hadSegs) {
+                // quiet night / aux-only — leave empty
+            }
+            out.add(SessionSummary.from(s))
+        }
+        if (dirty) {
+            writeRoot(running = root.running, current = root.current, history = root.history)
+        }
+        out.sortedByDescending { it.startMs }
     }
 
     fun loadLastFinished(): SleepSession? = loadHistory().firstOrNull()
 
+    /** Single session by id without re-scanning for callers that only need one night. */
+    fun loadSession(sessionId: String): SleepSession? = synchronized(lock) {
+        val root = cachedRoot() ?: return null
+        if (root.current?.id == sessionId) return root.current
+        root.history.firstOrNull { it.id == sessionId }
+    }
+
+    /**
+     * Prefer persisted segments; if missing/empty but audio events exist, run
+     * SegmentBuilder and persist once so reopen stays cheap. Never deletes events.
+     */
+    fun ensureSegmentsPersisted(sessionId: String): SleepSession? = synchronized(lock) {
+        val root = cachedRoot() ?: return null
+        val current = root.current
+        val history = root.history.toMutableList()
+        val target: SleepSession = when {
+            current?.id == sessionId -> current
+            else -> history.firstOrNull { it.id == sessionId } ?: return null
+        }
+        val beforeEmpty = target.segments.isEmpty()
+        target.ensureSegments()
+        if (beforeEmpty && target.segments.isNotEmpty() && !target.isRunning) {
+            writeRoot(running = root.running, current = current, history = history)
+        }
+        target
+    }
+
     fun startNew(): SleepSession = synchronized(lock) {
         val now = System.currentTimeMillis()
         val session = SleepSession(id = now.toString(16), startMs = now)
-        writeRoot(running = true, current = session, history = loadHistoryUnlocked())
+        val history = cachedRoot()?.history ?: emptyList()
+        writeRoot(running = true, current = session, history = history)
         session
     }
 
     fun appendEvent(event: SleepEvent) = synchronized(lock) {
-        val root = readRoot() ?: return
-        if (!root.optBoolean("running", false)) return
-        val current = parseSession(root.getJSONObject("current"))
+        val root = cachedRoot() ?: return
+        if (!root.running || root.current == null) return
+        val current = root.current
         current.events.add(event)
-        writeRoot(running = true, current = current, history = loadHistoryUnlocked())
+        // Invalidate segments for in-progress night (rebuild on demand)
+        current.segments.clear()
+        writeRoot(running = true, current = current, history = root.history)
     }
 
     fun appendNightEvent(event: NightEvent) = appendEvent(SleepEvent.fromNightEvent(event))
 
     fun stop(): SleepSession? = synchronized(lock) {
-        val root = readRoot() ?: return null
-        if (!root.optBoolean("running", false)) return null
-        val current = parseSession(root.getJSONObject("current"))
+        val root = cachedRoot() ?: return null
+        if (!root.running || root.current == null) return null
+        val current = root.current
         current.endMs = System.currentTimeMillis()
         current.materializeSegments()
-        val history = loadHistoryUnlocked().toMutableList()
+        val history = root.history.toMutableList()
         history.add(0, current)
         while (history.size > MAX_HISTORY) {
             val dropped = history.removeAt(history.lastIndex)
@@ -69,39 +124,23 @@ class SessionStore(context: Context) {
         current
     }
 
-    /**
-     * Delete one finished session from history and cascade-delete its audio clips.
-     * Does not delete a currently running session.
-     */
     fun deleteOne(sessionId: String): Boolean = synchronized(lock) {
-        val root = readRoot() ?: return false
-        val running = root.optBoolean("running", false)
-        val current = if (running) {
-            root.optJSONObject("current")?.let { parseSession(it) }
-        } else null
-        if (current?.id == sessionId) return false
-
-        val history = loadHistoryUnlocked().toMutableList()
+        val root = cachedRoot() ?: return false
+        if (root.current?.id == sessionId) return false
+        val history = root.history.toMutableList()
         val idx = history.indexOfFirst { it.id == sessionId }
         if (idx < 0) return false
         history.removeAt(idx)
-        writeRoot(running = running, current = current, history = history)
+        writeRoot(running = root.running, current = root.current, history = history)
         clipStore.deleteSessionClips(sessionId)
         true
     }
 
-    /**
-     * Clear all finished history sessions and their clips.
-     * Leaves a running session (if any) untouched.
-     * @return number of sessions removed
-     */
     fun clearAll(): Int = synchronized(lock) {
-        val root = readRoot()
-        val running = root?.optBoolean("running", false) == true
-        val current = if (running) {
-            root?.optJSONObject("current")?.let { parseSession(it) }
-        } else null
-        val history = loadHistoryUnlocked()
+        val root = cachedRoot()
+        val running = root?.running == true
+        val current = if (running) root?.current else null
+        val history = root?.history ?: emptyList()
         for (s in history) {
             clipStore.deleteSessionClips(s.id)
         }
@@ -109,19 +148,50 @@ class SessionStore(context: Context) {
         history.size
     }
 
-    private fun loadHistoryUnlocked(): List<SleepSession> {
-        val root = readRoot() ?: return emptyList()
-        val arr = root.optJSONArray("history") ?: JSONArray()
-        val list = mutableListOf<SleepSession>()
-        for (i in 0 until arr.length()) list.add(parseSession(arr.getJSONObject(i)))
-        return list
+    fun clipStore(): AudioClipStore = clipStore
+
+    fun sessionsFile(): File = file
+
+    // ── cache / IO ──────────────────────────────────────────────────────────
+
+    private fun cachedRoot(): RootCache? {
+        val cached = cacheRef.get()
+        if (cached != null && cached.filePath == file.absolutePath &&
+            cached.mtime == fileLastModified()
+        ) {
+            return cached
+        }
+        return readAndCache()
     }
 
-    private fun readRoot(): JSONObject? {
-        if (!file.exists()) return null
+    private fun fileLastModified(): Long = if (file.exists()) file.lastModified() else -1L
+
+    private fun readAndCache(): RootCache? {
+        if (!file.exists()) {
+            cacheRef.set(null)
+            return null
+        }
         return try {
-            JSONObject(file.readText())
+            val text = file.readText()
+            val o = JSONObject(text)
+            val running = o.optBoolean("running", false)
+            val current = if (running) {
+                o.optJSONObject("current")?.let { parseSession(it) }
+            } else null
+            val arr = o.optJSONArray("history") ?: JSONArray()
+            val history = mutableListOf<SleepSession>()
+            for (i in 0 until arr.length()) history.add(parseSession(arr.getJSONObject(i)))
+            val root = RootCache(
+                filePath = file.absolutePath,
+                mtime = fileLastModified(),
+                running = running,
+                current = current,
+                history = history
+            )
+            cacheRef.set(root)
+            root
         } catch (_: Exception) {
+            cacheRef.set(null)
             null
         }
     }
@@ -135,6 +205,15 @@ class SessionStore(context: Context) {
         for (s in history) arr.put(toJson(s))
         root.put("history", arr)
         file.writeText(root.toString())
+        cacheRef.set(
+            RootCache(
+                filePath = file.absolutePath,
+                mtime = fileLastModified(),
+                running = running,
+                current = current,
+                history = history.toList()
+            )
+        )
     }
 
     private fun toJson(s: SleepSession): JSONObject {
@@ -224,6 +303,10 @@ class SessionStore(context: Context) {
         )
     }
 
+    /**
+     * Parses a session JSON. Pre-v0.3 nights omit `segments` — that yields an empty list;
+     * events / clips stay intact. Callers use [ensureSegmentsPersisted] to materialize.
+     */
     private fun parseSession(o: JSONObject): SleepSession {
         val end = if (o.isNull("endMs")) null else o.getLong("endMs")
         val events = mutableListOf<SleepEvent>()
@@ -260,7 +343,25 @@ class SessionStore(context: Context) {
         )
     }
 
+    /** Public JSON helpers for export. */
+    fun sessionToExportJson(s: SleepSession): JSONObject = toJson(s)
+
     companion object {
         const val MAX_HISTORY = 90
+
+        private val lock = Any()
+        private val cacheRef = AtomicReference<RootCache?>(null)
+
+        fun invalidateCache() {
+            cacheRef.set(null)
+        }
     }
+
+    private data class RootCache(
+        val filePath: String,
+        val mtime: Long,
+        val running: Boolean,
+        val current: SleepSession?,
+        val history: List<SleepSession>
+    )
 }

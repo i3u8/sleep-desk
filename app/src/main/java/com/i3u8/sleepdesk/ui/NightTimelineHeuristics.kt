@@ -11,6 +11,8 @@ import kotlin.math.PI
 /**
  * Sliding-window activity + coarse experimental cycle bands.
  * Labels must stay honest: activity ≠ sleep staging; cycles = experimental heuristic.
+ *
+ * v0.3.1: activityBins is O(events + bins), not O(bins × events).
  */
 object NightTimelineHeuristics {
 
@@ -59,20 +61,30 @@ object NightTimelineHeuristics {
     fun isAudioEvent(type: String): Boolean = type in AUDIO_TYPES
     fun isInterrupt(type: String): Boolean = type in INTERRUPT_TYPES
 
+    /** Interrupt timestamps only — for timeline ticks without scanning all events on draw. */
+    fun interruptTimes(session: SleepSession): LongArray {
+        val list = ArrayList<Long>(32)
+        for (e in session.events) {
+            if (isInterrupt(e.type)) list.add(e.timeMs)
+        }
+        return list.toLongArray()
+    }
+
+    /**
+     * Single-pass bucketing: O(events + bins).
+     */
     fun activityBins(session: SleepSession, binMs: Long = 10 * 60_000L): List<ActivityBin> {
         val start = session.startMs
-        val end = session.endMs ?: System.currentTimeMillis()
-        val audio = session.events.filter { isAudioEvent(it.type) }
-        val bins = mutableListOf<ActivityBin>()
-        var t = start
-        var maxCount = 1f
-        val raw = mutableListOf<Pair<Long, Float>>()
-        while (t < end) {
-            val tEnd = min(t + binMs, end)
-            var score = 0f
-            for (e in audio) {
-                if (e.timeMs in t until tEnd) {
-                    score += when (e.type) {
+        val end = (session.endMs ?: System.currentTimeMillis()).coerceAtLeast(start + binMs)
+        val span = end - start
+        val binCount = ((span + binMs - 1) / binMs).toInt().coerceAtLeast(1).coerceAtMost(512)
+        val scores = FloatArray(binCount)
+        for (e in session.events) {
+            if (e.timeMs < start || e.timeMs >= end) continue
+            val idx = ((e.timeMs - start) / binMs).toInt().coerceIn(0, binCount - 1)
+            when {
+                isAudioEvent(e.type) -> {
+                    scores[idx] += when (e.type) {
                         NightEventType.SNORE.name -> 0.7f
                         NightEventType.ENV_NOISE.name -> 0.5f
                         NightEventType.NIGHT_WAKE_SOUND.name,
@@ -81,30 +93,23 @@ object NightTimelineHeuristics {
                         else -> 0.8f
                     }
                 }
+                isInterrupt(e.type) -> scores[idx] += 0.6f
             }
-            // Secondary interrupts bump activity slightly
-            for (e in session.events) {
-                if (isInterrupt(e.type) && e.timeMs in t until tEnd) {
-                    score += 0.6f
-                }
-            }
-            raw.add(t to score)
-            maxCount = max(maxCount, score)
-            t = tEnd
         }
-        for ((i, pair) in raw.withIndex()) {
-            val (binStart, score) = pair
-            val binEnd = if (i + 1 < raw.size) raw[i + 1].first else end
-            bins.add(ActivityBin(binStart, binEnd, (score / maxCount).coerceIn(0f, 1f)))
+        var maxCount = 1f
+        for (s in scores) maxCount = max(maxCount, s)
+        val bins = ArrayList<ActivityBin>(binCount)
+        for (i in 0 until binCount) {
+            val binStart = start + i * binMs
+            val binEnd = min(binStart + binMs, end)
+            bins.add(ActivityBin(binStart, binEnd, (scores[i] / maxCount).coerceIn(0f, 1f)))
         }
-        // Smooth lightly
         if (bins.size >= 3) {
-            val smoothed = bins.mapIndexed { i, b ->
+            return bins.mapIndexed { i, b ->
                 val a = bins[max(0, i - 1)].level
                 val c = bins[min(bins.lastIndex, i + 1)].level
                 b.copy(level = (a * 0.25f + b.level * 0.5f + c * 0.25f))
             }
-            return smoothed
         }
         return bins
     }
@@ -124,8 +129,7 @@ object NightTimelineHeuristics {
         for (bin in activity) {
             val mid = (bin.startMs + bin.endMs) / 2
             val phase = ((mid - start).toDouble() % ultradianMs) / ultradianMs // 0..1
-            // Cosine: early phase quieter-ish, mid rem-ish tendency, late rising wake-ish — weak prior only
-            val phaseHint = (-cos(phase * 2 * PI)).toFloat() // -1..1
+            val phaseHint = (-cos(phase * 2 * PI)).toFloat()
 
             var wakeScore = bin.level
             var remScore = 0.35f + 0.25f * phaseHint.coerceAtLeast(0f)
@@ -143,15 +147,12 @@ object NightTimelineHeuristics {
                         wakeScore += 0.15f
                     }
                     e.type == NightEventType.SNORE.name -> {
-                        // Sustained snore more common in quieter NREM-ish stretches (not "deep sleep")
                         quietScore += 0.2f
                         remScore -= 0.1f
                     }
                 }
             }
-            // First ~20 min bias wake-ish (bedtime settling)
             if (mid - start < 20 * 60_000L) wakeScore += 0.35f
-            // Last ~15 min bias wake-ish
             if (end - mid < 15 * 60_000L) wakeScore += 0.3f
 
             val kind = when {

@@ -11,7 +11,6 @@ import androidx.core.content.ContextCompat
 import com.i3u8.sleepdesk.R
 import com.i3u8.sleepdesk.audio.NightEventType
 import com.i3u8.sleepdesk.data.NightSegment
-import com.i3u8.sleepdesk.data.SleepEvent
 import com.i3u8.sleepdesk.data.SleepSession
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -24,6 +23,8 @@ import kotlin.math.min
  * Segment-first full-night timeline (docs/segments.md):
  * colored segment bands + thin activity ribbon + interrupt / clip ticks.
  * Tap a segment → [onSegmentTap]. Full event flood omitted.
+ *
+ * v0.3.1: draw path is O(segments + activity bins + interrupt ticks), not O(events).
  */
 class NightTimelineView @JvmOverloads constructor(
     context: Context,
@@ -31,9 +32,13 @@ class NightTimelineView @JvmOverloads constructor(
     defStyleAttr: Int = 0
 ) : View(context, attrs, defStyleAttr) {
 
-    private var session: SleepSession? = null
+    private var sessionStartMs: Long = 0L
+    private var sessionEndMs: Long = 0L
     private var segments: List<NightSegment> = emptyList()
     private var activity: List<NightTimelineHeuristics.ActivityBin> = emptyList()
+    private var interruptTimes: LongArray = LongArray(0)
+    /** Pre-resolved clip tick times from representative paths (no per-draw event scan). */
+    private var clipTickTimes: LongArray = LongArray(0)
     private var onSegmentTap: ((NightSegment) -> Unit)? = null
     private var showActivityRibbon: Boolean = true
 
@@ -87,13 +92,28 @@ class NightTimelineView @JvmOverloads constructor(
         showActivityRibbon: Boolean = true,
         onSegmentTap: ((NightSegment) -> Unit)? = null
     ) {
-        this.session = session
         this.showActivityRibbon = showActivityRibbon
         this.onSegmentTap = onSegmentTap
+        this.sessionStartMs = session.startMs
+        this.sessionEndMs = (session.endMs ?: System.currentTimeMillis()).coerceAtLeast(session.startMs + 60_000L)
         this.segments = session.ensureSegments()
         this.activity = if (showActivityRibbon) {
             NightTimelineHeuristics.activityBins(session, binMs = 5 * 60_000L)
         } else emptyList()
+        this.interruptTimes = NightTimelineHeuristics.interruptTimes(session)
+        // Resolve clip tick times once (path → event time); keep O(segments × clips) not O(events) on draw
+        val pathToTime = HashMap<String, Long>(64)
+        for (e in session.events) {
+            val p = e.clipRelativePath ?: continue
+            if (p.isNotEmpty()) pathToTime[p] = e.timeMs
+        }
+        val ticks = ArrayList<Long>(segments.size * 2)
+        for (seg in segments) {
+            for (path in seg.representativeClipPaths) {
+                pathToTime[path]?.let { ticks.add(it) }
+            }
+        }
+        this.clipTickTimes = ticks.toLongArray()
         invalidate()
         requestLayout()
     }
@@ -120,9 +140,9 @@ class NightTimelineView @JvmOverloads constructor(
     override fun onDraw(canvas: Canvas) {
         super.onDraw(canvas)
         segmentHits.clear()
-        val s = session ?: return
-        val start = s.startMs
-        val end = (s.endMs ?: System.currentTimeMillis()).coerceAtLeast(start + 60_000L)
+        if (sessionEndMs <= sessionStartMs) return
+        val start = sessionStartMs
+        val end = sessionEndMs
         val span = (end - start).toFloat()
         val chartL = padL
         val chartR = width - padR
@@ -185,20 +205,16 @@ class NightTimelineView @JvmOverloads constructor(
         val tickTop = y
         val tickBottom = y + ticksH
         canvas.drawLine(chartL, tickBottom, chartR, tickBottom, guidePaint)
-        for (e in s.events) {
-            if (e.timeMs < start || e.timeMs > end) continue
-            val x = chartL + ((e.timeMs - start) / span) * chartW
-            if (NightTimelineHeuristics.isInterrupt(e.type)) {
-                canvas.drawLine(x, tickTop, x, tickBottom, interruptPaint)
-            }
+        for (t in interruptTimes) {
+            if (t < start || t > end) continue
+            val x = chartL + ((t - start) / span) * chartW
+            canvas.drawLine(x, tickTop, x, tickBottom, interruptPaint)
         }
         markerPaint.color = colorClipTick
-        for (seg in segments) {
-            for (path in seg.representativeClipPaths) {
-                val ev = s.events.firstOrNull { it.clipRelativePath == path } ?: continue
-                val x = chartL + ((ev.timeMs - start) / span) * chartW
-                canvas.drawCircle(x, (tickTop + tickBottom) / 2f, 3.2f * density, markerPaint)
-            }
+        for (t in clipTickTimes) {
+            if (t < start || t > end) continue
+            val x = chartL + ((t - start) / span) * chartW
+            canvas.drawCircle(x, (tickTop + tickBottom) / 2f, 3.2f * density, markerPaint)
         }
 
         val fmt = SimpleDateFormat("HH:mm", Locale.getDefault())

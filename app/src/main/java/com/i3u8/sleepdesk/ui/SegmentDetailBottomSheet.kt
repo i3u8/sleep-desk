@@ -6,11 +6,15 @@ import android.view.View
 import android.view.ViewGroup
 import android.widget.LinearLayout
 import android.widget.TextView
+import androidx.lifecycle.lifecycleScope
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import com.google.android.material.bottomsheet.BottomSheetDialogFragment
 import com.google.android.material.button.MaterialButton
 import com.i3u8.sleepdesk.R
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import com.i3u8.sleepdesk.audio.AudioClipStore
 import com.i3u8.sleepdesk.audio.ClipPlayer
 import com.i3u8.sleepdesk.data.NightSegment
@@ -37,15 +41,25 @@ class SegmentDetailBottomSheet : BottomSheetDialogFragment() {
     override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
         sessionId = requireArguments().getString(ARG_SESSION) ?: return
         segmentId = requireArguments().getString(ARG_SEGMENT) ?: return
-        val store = SessionStore(requireContext())
-        val session = store.loadCurrent()?.takeIf { it.id == sessionId }
-            ?: store.loadHistory().firstOrNull { it.id == sessionId }
-            ?: return
-        val segment = session.ensureSegments().firstOrNull { it.id == segmentId } ?: return
-
-        bindHeader(view, segment)
-        bindClips(view, session, segment)
-        bindEventsExpand(view, session, segment)
+        // Load on IO; events list stays lazy until expand
+        view.findViewById<android.widget.TextView>(R.id.tvSegDetailLabel).text = "…"
+        viewLifecycleOwner.lifecycleScope.launch {
+            val pair = withContext(Dispatchers.IO) {
+                val store = SessionStore(requireContext())
+                val session = store.ensureSegmentsPersisted(sessionId!!)
+                    ?: store.loadSession(sessionId!!)
+                    ?: return@withContext null
+                val segment = session.segments.firstOrNull { it.id == segmentId }
+                    ?: session.ensureSegments().firstOrNull { it.id == segmentId }
+                    ?: return@withContext null
+                session to segment
+            }
+            if (!isAdded || pair == null) return@launch
+            val (session, segment) = pair
+            bindHeader(view, segment)
+            bindClips(view, session, segment)
+            bindEventsExpand(view, session, segment)
+        }
     }
 
     private fun bindHeader(view: View, seg: NightSegment) {
@@ -121,11 +135,12 @@ class SegmentDetailBottomSheet : BottomSheetDialogFragment() {
     private fun bindEventsExpand(view: View, session: SleepSession, seg: NightSegment) {
         val btn = view.findViewById<MaterialButton>(R.id.btnExpandEvents)
         val rv = view.findViewById<RecyclerView>(R.id.rvSegEvents)
-        val events = SegmentBuilder.eventsForSegment(session, seg)
-        btn.text = getString(R.string.segment_expand_events, events.size)
+        val countHint = seg.eventIds.size
+        btn.text = getString(R.string.segment_expand_events, countHint)
         btn.setOnClickListener {
             eventsExpanded = !eventsExpanded
             if (eventsExpanded) {
+                val events = SegmentBuilder.eventsForSegment(session, seg)
                 rv.visibility = View.VISIBLE
                 rv.layoutManager = LinearLayoutManager(requireContext())
                 rv.adapter = EventsAdapter(events) { e ->
@@ -135,7 +150,8 @@ class SegmentDetailBottomSheet : BottomSheetDialogFragment() {
                 btn.text = getString(R.string.segment_collapse_events)
             } else {
                 rv.visibility = View.GONE
-                btn.text = getString(R.string.segment_expand_events, events.size)
+                rv.adapter = null
+                btn.text = getString(R.string.segment_expand_events, countHint)
             }
         }
     }
