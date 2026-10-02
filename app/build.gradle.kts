@@ -23,7 +23,7 @@ android {
     val keyAliasEnv = System.getenv("ANDROID_KEY_ALIAS")
     val keyPasswordEnv = System.getenv("ANDROID_KEY_PASSWORD")
     val releaseKeystore = keystorePath?.takeIf { it.isNotBlank() }?.let { path ->
-        java.io.File(path).takeIf { it.isFile }
+        file(path).takeIf { f -> f.isFile }
     }
     val canSignRelease = releaseKeystore != null &&
         !keystorePassword.isNullOrBlank() &&
