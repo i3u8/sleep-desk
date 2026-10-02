@@ -64,7 +64,7 @@ class SessionExporter(context: Context) {
         ZipOutputStream(BufferedOutputStream(FileOutputStream(zipFile))).use { zos ->
             val meta = JSONObject()
             meta.put("exportVersion", 1)
-            meta.put("appVersion", "0.3.1")
+            meta.put("appVersion", "0.3.2")
             meta.put("exportedAtMs", System.currentTimeMillis())
             val arr = JSONArray()
             for (s in sessions) {
