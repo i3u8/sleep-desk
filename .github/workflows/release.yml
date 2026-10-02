@@ -59,31 +59,63 @@ jobs:
         with:
           packages: platform-tools platforms;android-34 build-tools;34.0.0
 
+      - name: Decode upload keystore (optional)
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+        run: |
+          if [ -z "$ANDROID_KEYSTORE_BASE64" ]; then
+            echo "ANDROID_KEYSTORE_BASE64 not set — debug signing"
+            echo "HAS_UPLOAD_KEYSTORE=false" >> "$GITHUB_ENV"
+            exit 0
+          fi
+          KEYSTORE_PATH="$RUNNER_TEMP/sleep-desk-upload.jks"
+          echo "$ANDROID_KEYSTORE_BASE64" | base64 -d > "$KEYSTORE_PATH"
+          echo "ANDROID_KEYSTORE_PATH=$KEYSTORE_PATH" >> "$GITHUB_ENV"
+          echo "HAS_UPLOAD_KEYSTORE=true" >> "$GITHUB_ENV"
+          echo "Wrote keystore ($(wc -c < "$KEYSTORE_PATH") bytes)"
+
       - name: Make gradlew executable
         run: chmod +x gradlew
 
-      - name: Test audio pipeline and assemble debug APK
-        run: ./gradlew testDebugUnitTest assembleDebug --no-daemon
+      - name: Test and assemble APK
+        env:
+          ANDROID_KEYSTORE_PATH: ${{ env.ANDROID_KEYSTORE_PATH }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          ./gradlew testDebugUnitTest --no-daemon
+          if [ "${HAS_UPLOAD_KEYSTORE}" = "true" ]; then
+            ./gradlew assembleRelease --no-daemon
+            OUT_DIR=app/build/outputs/apk/release
+            VARIANT=release
+          else
+            ./gradlew assembleDebug --no-daemon
+            OUT_DIR=app/build/outputs/apk/debug
+            VARIANT=debug
+          fi
+          echo "APK_VARIANT=$VARIANT" >> "$GITHUB_ENV"
+          echo "OUT_DIR=$OUT_DIR" >> "$GITHUB_ENV"
 
       - name: Prepare APK artifact
         id: apk
         run: |
-          SRC=$(ls app/build/outputs/apk/debug/*.apk | head -n1)
+          SRC=$(ls "$OUT_DIR"/*.apk | grep -v unsigned | head -n1)
           if [ -n "${{ steps.meta.outputs.tag }}" ]; then
-            NAME="sleep-desk-${{ steps.meta.outputs.tag }}-debug.apk"
+            NAME="sleep-desk-${{ steps.meta.outputs.tag }}-${APK_VARIANT}.apk"
           else
-            NAME="sleep-desk-debug-${{ steps.meta.outputs.short_sha }}.apk"
+            NAME="sleep-desk-${APK_VARIANT}-${{ steps.meta.outputs.short_sha }}.apk"
           fi
-          DEST="app/build/outputs/apk/debug/${NAME}"
+          DEST="$OUT_DIR/${NAME}"
           cp "$SRC" "$DEST"
           echo "path=${DEST}" >> "$GITHUB_OUTPUT"
           echo "name=${NAME}" >> "$GITHUB_OUTPUT"
-          ls -la app/build/outputs/apk/debug/
+          ls -la "$OUT_DIR"
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
-          name: sleep-desk-debug
+          name: sleep-desk-${{ env.APK_VARIANT }}
           path: ${{ steps.apk.outputs.path }}
           if-no-files-found: error
 

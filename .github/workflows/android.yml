@@ -34,11 +34,37 @@ jobs:
         with:
           packages: platform-tools platforms;android-34 build-tools;34.0.0
 
+      - name: Decode upload keystore (optional)
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+        run: |
+          if [ -z "$ANDROID_KEYSTORE_BASE64" ]; then
+            echo "ANDROID_KEYSTORE_BASE64 not set — default debug signing"
+            echo "HAS_UPLOAD_KEYSTORE=false" >> "$GITHUB_ENV"
+            exit 0
+          fi
+          KEYSTORE_PATH="$RUNNER_TEMP/sleep-desk-upload.jks"
+          echo "$ANDROID_KEYSTORE_BASE64" | base64 -d > "$KEYSTORE_PATH"
+          echo "ANDROID_KEYSTORE_PATH=$KEYSTORE_PATH" >> "$GITHUB_ENV"
+          echo "HAS_UPLOAD_KEYSTORE=true" >> "$GITHUB_ENV"
+          echo "Wrote keystore ($(wc -c < "$KEYSTORE_PATH") bytes)"
+
       - name: Make gradlew executable
         run: chmod +x gradlew
 
-      - name: Test audio pipeline and assemble debug APK
-        run: ./gradlew testDebugUnitTest assembleDebug --no-daemon
+      - name: Test audio pipeline and assemble APK
+        env:
+          ANDROID_KEYSTORE_PATH: ${{ env.ANDROID_KEYSTORE_PATH }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          # With upload secrets, debug + release buildTypes both use the upload key
+          # (see app/build.gradle.kts). Keep assembleDebug so auto-release paths stay stable.
+          ./gradlew testDebugUnitTest assembleDebug --no-daemon
+          if [ "${HAS_UPLOAD_KEYSTORE}" = "true" ]; then
+            ./gradlew assembleRelease --no-daemon
+          fi
 
       - name: Rename APK with short SHA
         run: |
@@ -48,12 +74,27 @@ jobs:
           cp "$SRC" "$DEST"
           echo "APK_PATH=$DEST" >> "$GITHUB_ENV"
           ls -la app/build/outputs/apk/debug/
+          if [ "${HAS_UPLOAD_KEYSTORE}" = "true" ] && ls app/build/outputs/apk/release/*.apk >/dev/null 2>&1; then
+            RSRC=$(ls app/build/outputs/apk/release/*.apk | grep -v unsigned | head -n1)
+            RDEST="app/build/outputs/apk/release/sleep-desk-release-${SHORT_SHA}.apk"
+            cp "$RSRC" "$RDEST"
+            echo "RELEASE_APK_PATH=$RDEST" >> "$GITHUB_ENV"
+            ls -la app/build/outputs/apk/release/
+          fi
 
       - name: Upload debug APK
         uses: actions/upload-artifact@v4
         with:
           name: sleep-desk-debug
           path: app/build/outputs/apk/debug/sleep-desk-debug-*.apk
+          if-no-files-found: error
+
+      - name: Upload release APK
+        if: env.HAS_UPLOAD_KEYSTORE == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: sleep-desk-release
+          path: app/build/outputs/apk/release/sleep-desk-release-*.apk
           if-no-files-found: error
 
   release:
@@ -70,6 +111,13 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: sleep-desk-debug
+          path: release-apk
+
+      - name: Download signed release APK if present
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          name: sleep-desk-release
           path: release-apk
 
       - name: Resolve automatic release identity
@@ -99,12 +147,11 @@ jobs:
           generate_release_notes: true
           make_latest: ${{ steps.meta.outputs.make_latest }}
           body: |
-            Automated main-branch build. The attached debug APK is the exact artifact
-            produced after this run's tests passed, not a separate rebuild.
+            Automated main-branch build. Attached APK(s) come from this run after tests passed
+            (not a separate rebuild).
 
-            The application version is defined in app/build.gradle.kts; the release
-            tag identifies this CI run and commit, not a new semantic app version.
-            Debug signatures may differ between builds. Export your history before
-            resolving installation conflicts; do not uninstall without a backup.
+            App version is in app/build.gradle.kts; the release tag identifies this CI run/commit.
+            When repository Secrets include the upload keystore, debug/release builds share that
+            signing key so upgrades stay consistent with local packaging.
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -45,13 +45,26 @@ Side-load only; not on Play Store yet.
 
 ## How to get CI APK
 
-- **Actions (every push/PR to `main`):** open [Actions](https://github.com/redreamality/sleep-desk/actions/workflows/android.yml) → latest successful **Android CI** run → download artifact `sleep-desk-debug` (APK named with short commit SHA).
+- **Actions (every push/PR to `main`):** open [Actions](https://github.com/redreamality/sleep-desk/actions/workflows/android.yml) → latest successful **Android CI** run → download artifact `sleep-desk-debug` (and `sleep-desk-release` when signing Secrets are set).
 - **Automatic Releases (pushes to `main` only):** after tests and the build succeed, the same APK is published as `main-<run-number>-<short-sha>`. PRs and failed builds never publish. Rerunning a CI run updates the same release; older commits do not replace Latest. App version numbers are not automatically incremented.
 - **Releases (tagged builds):** open [Releases](https://github.com/redreamality/sleep-desk/releases) for APKs attached to `v*` tags (e.g. `sleep-desk-v0.3.2-debug.apk`).
 
 No manual tag is needed for main builds. To cut a separate versioned release: `git tag vX.Y.Z && git push origin vX.Y.Z` (triggers the Release workflow). You can also run **Release** via `workflow_dispatch` with an optional tag input.
 
-These are debug-signed APKs. Signatures may differ across runs; export your history before resolving an installation conflict, and do not uninstall without a backup.
+Without upload-keystore Secrets, these are debug-signed APKs (signatures may differ across runs). With Secrets configured, CI uses your packaging key so upgrades stay consistent.
+
+## CI signing (upload keystore)
+
+Gradle reads signing from env (no keystore in git). Set these GitHub Actions **Secrets** to sign with your **existing** local packaging key:
+
+| Secret | Purpose |
+|--------|---------|
+| `ANDROID_KEYSTORE_BASE64` | Base64 of the local `.jks` / `.keystore` (`base64 -w0 your.jks`) |
+| `ANDROID_KEYSTORE_PASSWORD` | Keystore password |
+| `ANDROID_KEY_ALIAS` | Key alias |
+| `ANDROID_KEY_PASSWORD` | Key password |
+
+Workflows decode the base64 into `$RUNNER_TEMP/sleep-desk-upload.jks` and set `ANDROID_KEYSTORE_PATH`. **Do not generate a new key for CI.**
 
 ## How to use
 
@@ -152,13 +165,26 @@ MIT — see [LICENSE](LICENSE).
 
 ### 获取 CI APK
 
-- **Actions（每次 push/PR 到 `main`）：** 打开 [Actions](https://github.com/redreamality/sleep-desk/actions/workflows/android.yml) → 最近一次成功的 **Android CI** → 下载产物 `sleep-desk-debug`（文件名含短 SHA）。
+- **Actions（每次 push/PR 到 `main`）：** 打开 [Actions](https://github.com/redreamality/sleep-desk/actions/workflows/android.yml) → 最近一次成功的 **Android CI** → 下载产物 `sleep-desk-debug`（若已配置签名 Secrets，另有 `sleep-desk-release`）。
 - **自动发布（仅推送 `main`）：** 测试和打包成功后，将同一 APK 发布为 `main-运行编号-提交短哈希`。PR 和失败的构建不发布；重跑同一次 CI 更新同一 Release，旧提交不会替换 Latest。应用内版本号不会自动递增。
 - **Releases（打标签构建）：** 打开 [Releases](https://github.com/redreamality/sleep-desk/releases) 下载挂在 `v*` 标签上的 APK（如 `sleep-desk-v0.3.2-debug.apk`）。
 
 主分支构建无需手动打标签。另发版本号版：`git tag vX.Y.Z && git push origin vX.Y.Z`（触发 Release 工作流）。也可在 Actions 里手动跑 **Release**（可选填写 tag）。
 
-这些 APK 使用 debug 签名，不同构建的签名可能不同。遇到安装冲突先导出历史记录，不要未备份就卸载。
+未配置上传 keystore Secrets 时为 debug 签名（不同构建可能不一致）。配置后 CI 使用本机打包同一把 key，便于覆盖安装。
+
+### CI 签名（本机上传 keystore）
+
+Gradle 只从环境变量读签名（仓库不进 keystore）。在 GitHub Actions **Secrets** 配置：
+
+| Secret | 用途 |
+|--------|------|
+| `ANDROID_KEYSTORE_BASE64` | 本机 `.jks` / `.keystore` 的 Base64（`base64 -w0 your.jks`） |
+| `ANDROID_KEYSTORE_PASSWORD` | keystore 密码 |
+| `ANDROID_KEY_ALIAS` | key 别名 |
+| `ANDROID_KEY_PASSWORD` | key 密码 |
+
+Workflow 解到 `$RUNNER_TEMP/sleep-desk-upload.jks` 并设置 `ANDROID_KEYSTORE_PATH`。**不要为 CI 新造 key。**
 
 ### 使用
 

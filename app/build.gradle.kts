@@ -15,6 +15,32 @@ android {
         versionName = "0.3.2"
     }
 
+    // CI / local release signing via env (never commit the keystore).
+    // Secrets: ANDROID_KEYSTORE_BASE64 → file path in ANDROID_KEYSTORE_PATH,
+    // ANDROID_KEYSTORE_PASSWORD, ANDROID_KEY_ALIAS, ANDROID_KEY_PASSWORD.
+    val keystorePath = System.getenv("ANDROID_KEYSTORE_PATH")
+    val keystorePassword = System.getenv("ANDROID_KEYSTORE_PASSWORD")
+    val keyAliasEnv = System.getenv("ANDROID_KEY_ALIAS")
+    val keyPasswordEnv = System.getenv("ANDROID_KEY_PASSWORD")
+    val releaseKeystore = keystorePath?.takeIf { it.isNotBlank() }?.let { path ->
+        java.io.File(path).takeIf { it.isFile }
+    }
+    val canSignRelease = releaseKeystore != null &&
+        !keystorePassword.isNullOrBlank() &&
+        !keyAliasEnv.isNullOrBlank() &&
+        !keyPasswordEnv.isNullOrBlank()
+
+    signingConfigs {
+        if (canSignRelease) {
+            create("release") {
+                storeFile = releaseKeystore
+                storePassword = keystorePassword
+                keyAlias = keyAliasEnv
+                keyPassword = keyPasswordEnv
+            }
+        }
+    }
+
     buildTypes {
         release {
             isMinifyEnabled = false
@@ -22,6 +48,15 @@ android {
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
+            if (canSignRelease) {
+                signingConfig = signingConfigs.getByName("release")
+            }
+        }
+        debug {
+            // Same upload key when secrets present so CI installables stay upgradeable.
+            if (canSignRelease) {
+                signingConfig = signingConfigs.getByName("release")
+            }
         }
     }
 
