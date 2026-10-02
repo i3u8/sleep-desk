@@ -11,7 +11,7 @@ Minimal Android sleep tracker driven by the **microphone** (phone can stay on th
 | | |
 |---|---|
 | **Package** | `com.i3u8.sleepdesk` |
-| **Latest** | [v0.3.2](https://github.com/redreamality/sleep-desk/releases/tag/v0.3.2) |
+| **Latest Build** | [Latest successful main release](https://github.com/redreamality/sleep-desk/releases/latest) |
 | **License** | [MIT](LICENSE) |
 | **Docs** | [`docs/`](docs/) |
 
@@ -46,9 +46,12 @@ Side-load only; not on Play Store yet.
 ## How to get CI APK
 
 - **Actions (every push/PR to `main`):** open [Actions](https://github.com/redreamality/sleep-desk/actions/workflows/android.yml) → latest successful **Android CI** run → download artifact `sleep-desk-debug` (APK named with short commit SHA).
+- **Automatic Releases (pushes to `main` only):** after tests and the build succeed, the same APK is published as `main-<run-number>-<short-sha>`. PRs and failed builds never publish. Rerunning a CI run updates the same release; older commits do not replace Latest. App version numbers are not automatically incremented.
 - **Releases (tagged builds):** open [Releases](https://github.com/redreamality/sleep-desk/releases) for APKs attached to `v*` tags (e.g. `sleep-desk-v0.3.2-debug.apk`).
 
-To cut a release: `git tag vX.Y.Z && git push origin vX.Y.Z` (triggers the Release workflow). You can also run **Release** via `workflow_dispatch` with an optional tag input.
+No manual tag is needed for main builds. To cut a separate versioned release: `git tag vX.Y.Z && git push origin vX.Y.Z` (triggers the Release workflow). You can also run **Release** via `workflow_dispatch` with an optional tag input.
+
+These are debug-signed APKs. Signatures may differ across runs; export your history before resolving an installation conflict, and do not uninstall without a backup.
 
 ## How to use
 
@@ -117,7 +120,7 @@ MIT — see [LICENSE](LICENSE).
 | | |
 |---|---|
 | **包名** | `com.i3u8.sleepdesk` |
-| **最新版** | [v0.3.2](https://github.com/redreamality/sleep-desk/releases/tag/v0.3.2) |
+| **最新构建** | [最近成功的主分支发布](https://github.com/redreamality/sleep-desk/releases/latest) |
 | **许可证** | [MIT](LICENSE) |
 | **文档** | [`docs/`](docs/) |
 
@@ -150,9 +153,12 @@ MIT — see [LICENSE](LICENSE).
 ### 获取 CI APK
 
 - **Actions（每次 push/PR 到 `main`）：** 打开 [Actions](https://github.com/redreamality/sleep-desk/actions/workflows/android.yml) → 最近一次成功的 **Android CI** → 下载产物 `sleep-desk-debug`（文件名含短 SHA）。
+- **自动发布（仅推送 `main`）：** 测试和打包成功后，将同一 APK 发布为 `main-运行编号-提交短哈希`。PR 和失败的构建不发布；重跑同一次 CI 更新同一 Release，旧提交不会替换 Latest。应用内版本号不会自动递增。
 - **Releases（打标签构建）：** 打开 [Releases](https://github.com/redreamality/sleep-desk/releases) 下载挂在 `v*` 标签上的 APK（如 `sleep-desk-v0.3.2-debug.apk`）。
 
-发版：`git tag vX.Y.Z && git push origin vX.Y.Z`（触发 Release 工作流）。也可在 Actions 里手动跑 **Release**（可选填写 tag）。
+主分支构建无需手动打标签。另发版本号版：`git tag vX.Y.Z && git push origin vX.Y.Z`（触发 Release 工作流）。也可在 Actions 里手动跑 **Release**（可选填写 tag）。
+
+这些 APK 使用 debug 签名，不同构建的签名可能不同。遇到安装冲突先导出历史记录，不要未备份就卸载。
 
 ### 使用
 

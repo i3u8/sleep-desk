@@ -6,12 +6,21 @@ on:
   pull_request:
     branches: [main]
 
+permissions:
+  contents: read
+
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v7
+
+      - name: Test workflow release safeguards
+        run: uv run --python 3.12 --with pyyaml==6.0.3 python -m unittest discover -s .github/tests -v
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4
@@ -46,3 +55,56 @@ jobs:
           name: sleep-desk-debug
           path: app/build/outputs/apk/debug/sleep-desk-debug-*.apk
           if-no-files-found: error
+
+  release:
+    needs: build
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    concurrency:
+      group: main-auto-release
+      cancel-in-progress: false
+    steps:
+      - name: Download tested APK from this run
+        uses: actions/download-artifact@v4
+        with:
+          name: sleep-desk-debug
+          path: release-apk
+
+      - name: Resolve automatic release identity
+        id: meta
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          SHORT_SHA="${GITHUB_SHA:0:7}"
+          echo "tag=main-${GITHUB_RUN_NUMBER}-${SHORT_SHA}" >> "$GITHUB_OUTPUT"
+          test -s "release-apk/sleep-desk-debug-${SHORT_SHA}.apk"
+          MAIN_SHA="$(gh api "repos/${GITHUB_REPOSITORY}/commits/main" --jq .sha)"
+          if [ "$MAIN_SHA" = "$GITHUB_SHA" ]; then
+            echo "make_latest=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "make_latest=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Publish tested main build
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.meta.outputs.tag }}
+          name: ${{ steps.meta.outputs.tag }}
+          target_commitish: ${{ github.sha }}
+          files: release-apk/*.apk
+          fail_on_unmatched_files: true
+          generate_release_notes: true
+          make_latest: ${{ steps.meta.outputs.make_latest }}
+          body: |
+            Automated main-branch build. The attached debug APK is the exact artifact
+            produced after this run's tests passed, not a separate rebuild.
+
+            The application version is defined in app/build.gradle.kts; the release
+            tag identifies this CI run and commit, not a new semantic app version.
+            Debug signatures may differ between builds. Export your history before
+            resolving installation conflicts; do not uninstall without a backup.
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
