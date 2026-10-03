@@ -7,276 +7,213 @@ import android.media.MediaRecorder
 import android.os.SystemClock
 import android.util.Log
 import java.util.ArrayDeque
-import java.util.UUID
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.math.pow
 import kotlin.math.tanh
 
-/**
- * Doc-aligned night ambient engine: relative energy gate → candidate → rule classify → AAC clip.
- * Defaults prioritize recall (far desk / soft events) over precision.
- * @see docs/audio-algo.md
- */
+/** Detection owns the event; background inference only enriches it. */
 class NightAudioEngineImpl(
     context: Context,
     private val clipStore: AudioClipStore = AudioClipStore(context)
 ) : NightAudioEngine {
-
     private val appContext = context.applicationContext
     private val running = AtomicBoolean(false)
-    private var recordThread: Thread? = null
+    @Volatile private var recordThread: Thread? = null
+    @Volatile private var activeRecorder: AudioRecord? = null
     @Volatile private var listener: NightAudioListener? = null
-    @Volatile private var config = AudioAlgoConfig()
-    @Volatile private var sessionId: String = ""
     @Volatile private var screenOnNearby = false
     @Volatile private var lastScreenChangeMs: Long? = null
 
-    private var lastSnoreClipMs: Long? = null
-    private var lastSnoreEventMs: Long? = null
-    private var sessionStartMs = 0L
-    private val hourlyClipCounts = HashMap<NightEventType, Int>()
-    private var hourBucket = 0L
-
-    private lateinit var detector: CandidateDetector
-
-    override fun setListener(listener: NightAudioListener?) {
-        this.listener = listener
-    }
-
-    override fun isRunning(): Boolean = running.get()
-
+    override fun setListener(listener: NightAudioListener?) { this.listener = listener }
+    override fun isRunning(): Boolean = running.get() || recordThread?.isAlive == true
     override fun onAuxScreenChanged(isOn: Boolean) {
         screenOnNearby = isOn
         lastScreenChangeMs = SystemClock.elapsedRealtime()
     }
 
+    @Synchronized
     override fun start(sessionId: String, config: AudioAlgoConfig) {
-        if (!running.compareAndSet(false, true)) return
-        this.sessionId = sessionId
-        this.config = config
-        this.sessionStartMs = System.currentTimeMillis()
-        detector = CandidateDetector(config)
-        lastSnoreClipMs = null
-        lastSnoreEventMs = null
-        hourlyClipCounts.clear()
-        hourBucket = 0L
-
-        recordThread = Thread({
-            try {
-                loop()
-            } catch (t: Throwable) {
-                Log.e(TAG, "engine crashed", t)
-                listener?.onEngineError(t)
-            } finally {
-                running.set(false)
-            }
-        }, "night-audio").also {
+        if (recordThread?.isAlive == true || !running.compareAndSet(false, true)) return
+        recordThread = Thread({ runSession(sessionId, config) }, "night-audio").also {
             it.priority = Thread.NORM_PRIORITY - 1
             it.start()
         }
     }
 
+    /** Blocking drain; the service invokes this off the Android main thread. */
     override fun stop() {
         running.set(false)
-        recordThread?.join(1500)
-        recordThread = null
+        try { activeRecorder?.stop() } catch (_: Exception) { }
+        val thread = recordThread
+        if (thread != Thread.currentThread()) thread?.join()
+        if (recordThread === thread) recordThread = null
     }
 
-    private fun loop() {
+    private fun runSession(sessionId: String, config: AudioAlgoConfig) {
+        val publicationFailed = AtomicBoolean(false)
+        fun publicationFailure(failure: Throwable) {
+            if (publicationFailed.compareAndSet(false, true)) {
+                running.set(false)
+                Log.e(TAG, "event persistence cannot keep up; stopping capture", failure)
+                listener?.onEngineError(failure)
+            }
+        }
+        val publisher = EventUpdatePublisher(256, { listener?.onEvent(it) }, ::publicationFailure)
+        fun publish(event: NightEvent) {
+            val pinned = event.copy(sessionId = sessionId)
+            if (!publisher.publish(pinned)) {
+                if (!publisher.isClosed) {
+                    publicationFailure(EventPublicationException("Sound event storage queue is full"))
+                } else {
+                    // Never bypass the queue: that could let a late result overtake a
+                    // previously queued PENDING update. Stop converts unfinished events to FAILED.
+                    Log.w(TAG, "analysis update arrived after publication closed")
+                }
+            }
+        }
+        val processor = SoundEventProcessor(
+            config, { YamNetSoundModel(appContext) },
+            { event, audio ->
+                clipStore.encodeAac(
+                    sessionId, NightEventType.UNKNOWN, audio.clipPcm, config.sampleRate,
+                    config.aacBitrate, event.startMs, event.id
+                )?.second
+            }, ::publish
+        )
+        val analysis = BackgroundAudioQueue(
+            config.maxAnalysisQueue, processor::process, processor::cancel, processor::close
+        )
+        try {
+            loop(config, ::publish) { event, audio -> analysis.submit(event, audio) }
+        } catch (failure: Throwable) {
+            if (running.get()) {
+                Log.e(TAG, "capture failed", failure)
+                listener?.onEngineError(failure)
+            }
+        } finally {
+            running.set(false)
+            if (!analysis.finish()) Log.w(TAG, "analysis shutdown deadline exceeded")
+            if (!publisher.finish()) {
+                Log.w(TAG, "event publisher still draining")
+            }
+        }
+    }
+
+    private fun loop(
+        config: AudioAlgoConfig,
+        onDetected: (NightEvent) -> Unit,
+        onContext: (NightEvent, CandidateAudio) -> Unit
+    ) {
         val sr = config.sampleRate
         val hopSamples = (sr * config.hopMs / 1000).coerceAtLeast(1)
-        var source = initialAudioSource()
-        var recorder = openRecorder(source, sr) ?: return
-
+        val initial = if (config.preferUnprocessedSource) MediaRecorder.AudioSource.UNPROCESSED
+        else MediaRecorder.AudioSource.MIC
+        var handle = openRecorder(initial, sr) ?: return
+        activeRecorder = handle.recorder
         val hop = ShortArray(hopSamples)
         val probeLevels = ArrayDeque<Float>()
-        var probed = !config.fallbackMicIfLowGain || source == MediaRecorder.AudioSource.MIC
+        var probed = !config.fallbackMicIfLowGain || handle.source == MediaRecorder.AudioSource.MIC
         val probeHops = (config.lowGainProbeMs / config.hopMs).coerceAtLeast(40)
-
+        var pipeline: EventDetectionPipeline? = null
         try {
-            recorder.startRecording()
-            sessionStartMs = System.currentTimeMillis()
-            Log.i(TAG, "recording source=$source margin=${config.effectiveMarginDb()} sens=${config.sensitivity}")
+            handle.recorder.startRecording()
+            fun withCaptureInfo(event: NightEvent): NightEvent {
+                val nearScreen = screenOnNearby || (lastScreenChangeMs?.let {
+                    SystemClock.elapsedRealtime() - it < 30_000L
+                } ?: false)
+                return event.copy(features = event.features + mapOf(
+                    "audioSource" to handle.source.toFloat(),
+                    "screenOnNearby" to if (nearScreen) 1f else 0f
+                ))
+            }
+            val stream = EventDetectionPipeline(
+                config, System.currentTimeMillis(),
+                { onDetected(withCaptureInfo(it)) },
+                { event, audio -> onContext(withCaptureInfo(event), audio) }
+            )
+            pipeline = stream
+            Log.i(TAG, "recording source=${handle.source} margin=${config.effectiveMarginDb()}")
             while (running.get()) {
-                val n = recorder.read(hop, 0, hopSamples)
-                if (n <= 0) continue
-
-                if (!probed && !detector.inCandidate) {
-                    val rms = FeatureExtractor.rmsDb(hop, n)
-                    probeLevels.addLast(rms)
+                val n = handle.recorder.read(hop, 0, hopSamples)
+                if (n < 0) {
+                    if (!running.get()) break
+                    throw IllegalStateException("AudioRecord read=$n")
+                }
+                if (n == 0) continue
+                if (!probed && !stream.inCandidate) {
+                    probeLevels.addLast(FeatureExtractor.rmsDb(hop, n))
                     if (probeLevels.size >= probeHops) {
-                        val med = probeLevels.sorted()[probeLevels.size / 2]
-                        if (med < config.lowGainDbThreshold && source != MediaRecorder.AudioSource.MIC) {
-                            Log.i(TAG, "low gain on UNPROCESSED (median=$med dB) → fallback MIC")
-                            try {
-                                recorder.stop()
-                            } catch (_: Exception) {
-                            }
-                            recorder.release()
-                            source = MediaRecorder.AudioSource.MIC
-                            recorder = openRecorder(source, sr) ?: return
-                            recorder.startRecording()
-                            detector.resetNoiseFloor()
+                        val median = probeLevels.sorted()[probeLevels.size / 2]
+                        if (median < config.lowGainDbThreshold && handle.source != MediaRecorder.AudioSource.MIC) {
+                            applyDigitalGain(hop, n, config.digitalGainDb)
+                            stream.process(hop, n)
+                            stream.flush()
+                            try { handle.recorder.stop() } catch (_: Exception) { }
+                            handle.recorder.release()
+                            activeRecorder = null
+                            handle = openRecorder(MediaRecorder.AudioSource.MIC, sr) ?: return
+                            activeRecorder = handle.recorder
+                            handle.recorder.startRecording()
+                            stream.discontinuity(System.currentTimeMillis())
                             probeLevels.clear()
+                            probed = true
+                            continue
                         }
                         probed = true
                     }
                 }
-
-                processHop(hop, n)
+                applyDigitalGain(hop, n, config.digitalGainDb)
+                stream.process(hop, n)
+                listener?.onNoiseFloor(stream.noiseFloorDb)
             }
         } finally {
             try {
-                recorder.stop()
-            } catch (_: Exception) {
+                pipeline?.flush()
+            } finally {
+                try { handle.recorder.stop() } catch (_: Exception) { }
+                handle.recorder.release()
+                activeRecorder = null
             }
-            recorder.release()
         }
     }
 
-    private fun openRecorder(source: Int, sr: Int): AudioRecord? {
-        val minBuf = AudioRecord.getMinBufferSize(
+    private data class RecordingHandle(val recorder: AudioRecord, val source: Int)
+
+    private fun openRecorder(source: Int, sr: Int): RecordingHandle? {
+        val minimum = AudioRecord.getMinBufferSize(
             sr, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT
         )
-        if (minBuf <= 0) {
-            listener?.onEngineError(IllegalStateException("AudioRecord minBuf=$minBuf"))
+        if (minimum <= 0) {
+            listener?.onEngineError(IllegalStateException("AudioRecord minBuf=$minimum"))
             return null
         }
-        val bufSize = maxOf(minBuf, sr)
         val recorder = try {
-            AudioRecord(source, sr, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT, bufSize * 2)
-        } catch (e: SecurityException) {
-            listener?.onEngineError(e)
+            AudioRecord(source, sr, AudioFormat.CHANNEL_IN_MONO,
+                AudioFormat.ENCODING_PCM_16BIT, maxOf(minimum, sr) * 2)
+        } catch (failure: Exception) {
+            listener?.onEngineError(failure)
             return null
         }
         if (recorder.state != AudioRecord.STATE_INITIALIZED) {
             recorder.release()
-            if (source != MediaRecorder.AudioSource.MIC) {
-                Log.w(TAG, "source $source failed init, trying MIC")
-                return openRecorder(MediaRecorder.AudioSource.MIC, sr)
-            }
+            if (source != MediaRecorder.AudioSource.MIC) return openRecorder(MediaRecorder.AudioSource.MIC, sr)
             listener?.onEngineError(IllegalStateException("AudioRecord not initialized"))
             return null
         }
-        return recorder
+        return RecordingHandle(recorder, source)
     }
 
-    private fun initialAudioSource(): Int {
-        if (config.preferUnprocessedSource) {
-            return try {
-                MediaRecorder.AudioSource.UNPROCESSED
-            } catch (_: Exception) {
-                MediaRecorder.AudioSource.MIC
-            }
-        }
-        return MediaRecorder.AudioSource.MIC
-    }
-
-    private fun processHop(frame: ShortArray, count: Int) {
-        applyDigitalGain(frame, count, config.digitalGainDb)
-        val candidate = detector.process(frame, count)
-        listener?.onNoiseFloor(detector.noiseFloorDb)
-        if (candidate != null) finishCandidate(candidate)
-    }
-
-    /** Apply fixed software gain while softly saturating peaks; no system AGC is enabled. */
+    /** Keep the previously recorded gain contract; no per-clip loudness normalization. */
     private fun applyDigitalGain(frame: ShortArray, count: Int, gainDb: Float) {
         if (count <= 0 || gainDb == 0f) return
-        val linearGain = 10.0.pow((gainDb / 20.0).toDouble()).toFloat()
-        if (!linearGain.isFinite() || linearGain <= 0f) return
-        val tanhGain = tanh(linearGain.toDouble()).toFloat().coerceAtLeast(1e-6f)
+        val gain = 10.0.pow((gainDb / 20.0).toDouble()).toFloat()
+        if (!gain.isFinite() || gain <= 0f) return
+        val denominator = tanh(gain.toDouble()).toFloat().coerceAtLeast(1e-6f)
         for (i in 0 until count) {
-            val normalized = frame[i] / 32768f
-            val gained = normalized * linearGain
-            val saturated = tanh(gained.toDouble()).toFloat() / tanhGain
-            frame[i] = (saturated.coerceIn(-1f, 1f) * 32767f).toInt().toShort()
+            val value = tanh((frame[i] / 32768f * gain).toDouble()).toFloat() / denominator
+            frame[i] = (value.coerceIn(-1f, 1f) * 32767f).toInt().toShort()
         }
     }
 
-    private fun finishCandidate(candidate: CandidateAudio) {
-        val sr = config.sampleRate
-        val startMs = candidate.startMs(sessionStartMs, sr)
-        val endMs = candidate.endMs(sessionStartMs, sr)
-        val durationMs = candidate.pcm.size * 1000f / sr
-        val feats = FeatureExtractor.extract(candidate.pcm, sr, durationMs)
-        val nearScreen = screenOnNearby || (lastScreenChangeMs?.let {
-            SystemClock.elapsedRealtime() - it < 30_000L
-        } ?: false)
-        val (type, conf) = RuleClassifier.classify(feats, nearScreen, candidate.noiseFloorDb)
-
-        if (type == NightEventType.FALSE_TRIGGER || conf < config.confidenceFloor) return
-
-        if (type == NightEventType.SNORE) {
-            val now = candidate.endSample * 1000 / sr
-            if (lastSnoreEventMs?.let { now - it < config.snoreMergeMs } == true) {
-                if (lastSnoreClipMs?.let { now - it < config.snoreClipIntervalMs } == true) return
-            }
-            lastSnoreEventMs = now
-        }
-
-        val saveClip = shouldSaveClip(type)
-        var eventId = UUID.randomUUID().toString().replace("-", "").take(8)
-        var clipPath: String? = null
-
-        if (saveClip && allowClipThisHour(type, candidate.endSample)) {
-            val encoded = clipStore.encodeAac(
-                sessionId = sessionId,
-                type = type,
-                pcm = candidate.clipPcm,
-                sampleRate = sr,
-                bitrate = config.aacBitrate,
-                timeMs = startMs,
-                eventId = eventId
-            )
-            if (encoded != null) {
-                eventId = encoded.first
-                clipPath = encoded.second
-                if (type == NightEventType.SNORE) lastSnoreClipMs = candidate.endSample * 1000 / sr
-                bumpHourly(type)
-            }
-        }
-
-        val event = NightEvent(
-            id = eventId,
-            type = type,
-            startMs = startMs,
-            endMs = endMs,
-            confidence = conf,
-            clipRelativePath = clipPath,
-            features = feats.toMap() + mapOf(
-                "noiseFloorDb" to candidate.noiseFloorDb,
-                "snrDb" to (feats.rmsDb - candidate.noiseFloorDb)
-            ) + if (clipPath != null) candidate.clipFeatures(sr) else emptyMap(),
-            algoVersion = RuleClassifier.VERSION
-        )
-        listener?.onEvent(event)
-    }
-
-    private fun shouldSaveClip(type: NightEventType): Boolean = when (type) {
-        NightEventType.SNORE,
-        NightEventType.COUGH,
-        NightEventType.NIGHT_WAKE_SOUND,
-        NightEventType.ABNORMAL -> true
-        NightEventType.SPEECH -> config.saveSpeechClips
-        NightEventType.ENV_NOISE,
-        NightEventType.FALSE_TRIGGER -> false
-    }
-
-    private fun allowClipThisHour(type: NightEventType, endSample: Long): Boolean {
-        val hour = endSample / (config.sampleRate * 3_600L)
-        if (hour != hourBucket) {
-            hourBucket = hour
-            hourlyClipCounts.clear()
-        }
-        val n = hourlyClipCounts[type] ?: 0
-        return n < 120
-    }
-
-    private fun bumpHourly(type: NightEventType) {
-        hourlyClipCounts[type] = (hourlyClipCounts[type] ?: 0) + 1
-    }
-
-    companion object {
-        private const val TAG = "NightAudioEngine"
-    }
+    companion object { private const val TAG = "NightAudioEngine" }
 }

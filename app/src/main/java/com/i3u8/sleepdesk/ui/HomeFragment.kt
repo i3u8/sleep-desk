@@ -53,6 +53,7 @@ class HomeFragment : Fragment() {
     private lateinit var btnDeleteLast: MaterialButton
     private var tracking = false
     private var lastFinishedId: String? = null
+    private val notifiedEventIds = linkedSetOf<String>()
 
     private val permissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
@@ -70,8 +71,14 @@ class HomeFragment : Fragment() {
         override fun onReceive(context: Context?, intent: Intent?) {
             if (intent?.action == SleepTrackingService.ACTION_EVENT) {
                 val type = intent.getStringExtra(SleepTrackingService.EXTRA_EVENT_TYPE)
-                if (!type.isNullOrEmpty()) {
+                val eventId = intent.getStringExtra(SleepTrackingService.EXTRA_EVENT_ID)
+                if (!type.isNullOrEmpty() && eventId != null && notifiedEventIds.add(eventId)) {
                     showLiveEventFeedback(type)
+                }
+            } else if (intent?.action == SleepTrackingService.ACTION_STOPPED) {
+                val error = intent.getStringExtra(SleepTrackingService.EXTRA_ERROR)
+                if (!error.isNullOrBlank()) {
+                    view?.let { Snackbar.make(it, error, Snackbar.LENGTH_LONG).setAnchorView(btnToggle).show() }
                 }
             }
             refreshUi()
@@ -79,7 +86,13 @@ class HomeFragment : Fragment() {
     }
 
     override fun onCreateView(inflater: LayoutInflater, container: ViewGroup?, savedInstanceState: Bundle?): View {
+        notifiedEventIds.addAll(savedInstanceState?.getStringArrayList("notified_event_ids").orEmpty())
         return inflater.inflate(R.layout.fragment_home, container, false)
+    }
+
+    override fun onSaveInstanceState(outState: Bundle) {
+        super.onSaveInstanceState(outState)
+        outState.putStringArrayList("notified_event_ids", ArrayList(notifiedEventIds))
     }
 
     override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
@@ -113,6 +126,11 @@ class HomeFragment : Fragment() {
             val id = lastFinishedId ?: return@setOnClickListener
             confirmDeleteLast(id)
         }
+
+        parentFragmentManager.setFragmentResultListener(
+            EventDetailBottomSheet.RESULT_REVIEW,
+            viewLifecycleOwner
+        ) { _, _ -> refreshUi() }
 
         parentFragmentManager.setFragmentResultListener(
             SessionDetailBottomSheet.RESULT_KEY,

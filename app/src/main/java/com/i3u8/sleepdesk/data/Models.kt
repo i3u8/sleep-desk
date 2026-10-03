@@ -2,6 +2,8 @@ package com.i3u8.sleepdesk.data
 
 import com.i3u8.sleepdesk.audio.NightEvent
 import com.i3u8.sleepdesk.audio.NightEventType
+import com.i3u8.sleepdesk.audio.ClassificationStatus
+import com.i3u8.sleepdesk.audio.ClipStatus
 
 /**
  * Session + indexed night events (clip paths only — no full-night audio).
@@ -17,9 +19,23 @@ data class SleepEvent(
     val clipRelativePath: String? = null,
     val note: String? = null,
     val algoVersion: String? = null,
-    val features: Map<String, Float> = emptyMap()
+    val features: Map<String, Float> = emptyMap(),
+    val detectionConfidence: Float = 0f,
+    val classificationStatus: ClassificationStatus = ClassificationStatus.LEGACY,
+    val classScores: Map<String, Float> = emptyMap(),
+    val suggestedTypes: List<String> = emptyList(),
+    val modelVersion: String? = null,
+    val classificationReason: String? = null,
+    val clipStatus: ClipStatus = ClipStatus.LEGACY,
+    val reviewFlags: Set<String> = emptySet(),
+    val userLabel: String? = null,
+    val revision: Long = 0
 ) {
+    val effectiveType: String get() = userLabel ?: type
+
     companion object {
+        const val REVIEW_IMPORTANT = "USER_IMPORTANT"
+        const val REVIEW_EDITED = "USER_REVIEWED"
         fun fromNightEvent(e: NightEvent): SleepEvent = SleepEvent(
             id = e.id,
             timeMs = e.startMs,
@@ -27,12 +43,22 @@ data class SleepEvent(
             type = e.type.name,
             peakLevel = (e.features["peakDb"]?.takeIf { it.isFinite() }
                 ?: e.features["rmsDb"]?.takeIf { it.isFinite() } ?: 0f).toDouble(),
-            confidence = e.confidence,
+            confidence = e.confidence.takeIf { it.isFinite() } ?: 0f,
             clipRelativePath = e.clipRelativePath,
             note = e.features["periodSec"]?.takeIf { it.isFinite() }
                 ?.let { "period=${"%.2f".format(it)}s" },
             algoVersion = e.algoVersion,
-            features = e.features.filterValues { it.isFinite() }
+            features = e.features.filterValues { it.isFinite() },
+            detectionConfidence = e.detectionConfidence.takeIf { it.isFinite() } ?: 0f,
+            classificationStatus = e.classificationStatus,
+            classScores = e.classScores.filterValues { it.isFinite() },
+            suggestedTypes = e.suggestedTypes,
+            modelVersion = e.modelVersion,
+            classificationReason = e.classificationReason,
+            clipStatus = e.clipStatus,
+            reviewFlags = e.reviewFlags,
+            userLabel = e.userLabel,
+            revision = e.revision
         )
 
         const val TYPE_SCREEN_ON = "SCREEN_ON"
@@ -58,12 +84,12 @@ data class SleepSession(
         return (end - startMs).coerceAtLeast(0L)
     }
 
-    fun countByType(type: String): Int = events.count { it.type == type }
+    fun countByType(type: String): Int = events.count { it.effectiveType == type }
 
     fun countByType(type: NightEventType): Int = countByType(type.name)
 
     fun audioEventCount(): Int = events.count { e ->
-        NightEventType.entries.any { it.name == e.type && it != NightEventType.FALSE_TRIGGER }
+        NightEventType.entries.any { it.name == e.effectiveType && it != NightEventType.FALSE_TRIGGER }
     }
 
     fun clipCount(): Int = events.count { !it.clipRelativePath.isNullOrEmpty() }
@@ -81,7 +107,7 @@ data class SleepSession(
      * Prefer persisted segments; rebuild from events if missing (legacy / in-progress).
      */
     fun ensureSegments(config: SegmentConfig = SegmentConfig()): List<NightSegment> {
-        if (segments.isNotEmpty()) return segments
+        if (segments.isNotEmpty() && segments.all { it.segmentVersion == SegmentBuilder.VERSION }) return segments
         val built = SegmentBuilder.build(this, config)
         segments.clear()
         segments.addAll(built)

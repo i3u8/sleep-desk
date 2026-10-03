@@ -1,11 +1,16 @@
 package com.i3u8.sleepdesk.data
 
 import android.content.Context
+import android.util.AtomicFile
 import com.i3u8.sleepdesk.audio.AudioClipStore
 import com.i3u8.sleepdesk.audio.NightEvent
+import com.i3u8.sleepdesk.audio.ClassificationStatus
+import com.i3u8.sleepdesk.audio.ClipStatus
+import com.i3u8.sleepdesk.audio.NightEventType
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
+import java.io.FileOutputStream
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicReference
 
@@ -21,6 +26,7 @@ class SessionStore(context: Context) {
 
     private val appContext = context.applicationContext
     private val file = File(appContext.filesDir, "sessions.json")
+    private val atomicFile = AtomicFile(file)
     private val clipStore = AudioClipStore(appContext)
 
     fun loadCurrent(): SleepSession? = synchronized(lock) {
@@ -45,7 +51,7 @@ class SessionStore(context: Context) {
         val out = mutableListOf<SessionSummary>()
         for (s in root.history) {
             val hadSegs = s.segments.isNotEmpty()
-            if (!hadSegs && s.audioEventCount() > 0) {
+            if ((!hadSegs || s.segments.any { it.segmentVersion != SegmentBuilder.VERSION }) && s.audioEventCount() > 0) {
                 s.ensureSegments()
                 dirty = true
             } else if (!hadSegs) {
@@ -80,9 +86,9 @@ class SessionStore(context: Context) {
             current?.id == sessionId -> current
             else -> history.firstOrNull { it.id == sessionId } ?: return null
         }
-        val beforeEmpty = target.segments.isEmpty()
+        val needsRebuild = target.segments.isEmpty() || target.segments.any { it.segmentVersion != SegmentBuilder.VERSION }
         target.ensureSegments()
-        if (beforeEmpty && target.segments.isNotEmpty() && !target.isRunning) {
+        if (needsRebuild && target.segments.isNotEmpty() && !target.isRunning) {
             writeRoot(running = root.running, current = current, history = history)
         }
         target
@@ -90,7 +96,7 @@ class SessionStore(context: Context) {
 
     fun startNew(): SleepSession = synchronized(lock) {
         val now = System.currentTimeMillis()
-        val session = SleepSession(id = now.toString(16), startMs = now)
+        val session = SleepSession(id = UUID.randomUUID().toString(), startMs = now)
         val history = cachedRoot()?.history ?: emptyList()
         writeRoot(running = true, current = session, history = history)
         session
@@ -106,13 +112,79 @@ class SessionStore(context: Context) {
         writeRoot(running = true, current = current, history = root.history)
     }
 
-    fun appendNightEvent(event: NightEvent) = appendEvent(SleepEvent.fromNightEvent(event))
+    fun findSessionForEvent(eventId: String): SleepSession? = synchronized(lock) {
+        val root = cachedRoot() ?: return null
+        (listOfNotNull(root.current) + root.history)
+            .singleOrNull { s -> s.events.any { it.id == eventId } }
+    }
 
-    fun stop(): SleepSession? = synchronized(lock) {
+    /** Explicit ownership survives stop; a deleted owner's callbacks must never create another night. */
+    fun appendNightEvent(event: NightEvent, sessionId: String? = null) = synchronized(lock) {
+        val root = cachedRoot() ?: return
+        if (event.sessionId != null && sessionId != null && event.sessionId != sessionId) return
+        val ownerId = event.sessionId ?: sessionId
+        val target = if (ownerId != null) {
+            (listOfNotNull(root.current) + root.history).firstOrNull { it.id == ownerId }
+        } else {
+            root.current?.takeIf { root.running }
+        } ?: return
+        val incoming = SleepEvent.fromNightEvent(event)
+        val index = target.events.indexOfFirst { it.id == event.id }
+        val old = target.events.getOrNull(index)
+        if (old != null) {
+            if (incoming.revision < old.revision) return
+            if (incoming.revision == old.revision && incoming.classificationStatus == ClassificationStatus.PENDING &&
+                old.classificationStatus in setOf(ClassificationStatus.SUGGESTED,
+                    ClassificationStatus.UNCERTAIN, ClassificationStatus.FAILED)) return
+        }
+        val merged = if (old == null) incoming else {
+            val reviewed = SleepEvent.REVIEW_EDITED in old.reviewFlags
+            incoming.copy(
+                clipRelativePath = incoming.clipRelativePath ?: old.clipRelativePath,
+                clipStatus = if (old.clipStatus == ClipStatus.SAVED &&
+                    (incoming.clipRelativePath == null ||
+                        incoming.clipStatus in setOf(ClipStatus.LEGACY, ClipStatus.PENDING))) old.clipStatus else incoming.clipStatus,
+                userLabel = if (reviewed || old.userLabel != null) old.userLabel else incoming.userLabel,
+                reviewFlags = if (reviewed) {
+                    (incoming.reviewFlags - SleepEvent.REVIEW_IMPORTANT) + old.reviewFlags
+                } else incoming.reviewFlags + old.reviewFlags
+            )
+        }
+        val settled = if (target.isRunning) merged else recoverPending(merged)
+        if (index < 0) target.events.add(settled) else {
+            target.events[index] = settled
+            target.events.removeAll { it.id == event.id && it !== settled }
+        }
+        target.segments.clear()
+        writeRoot(root.running, root.current, root.history)
+    }
+
+    fun updateEventReview(sessionId: String, eventId: String, userLabel: String?, important: Boolean): Boolean =
+        synchronized(lock) {
+            if (userLabel != null && NightEventType.entries.none { it.name == userLabel }) return false
+            val root = cachedRoot() ?: return false
+            val target = (listOfNotNull(root.current) + root.history).firstOrNull { it.id == sessionId }
+                ?: return false
+            val index = target.events.indexOfFirst { it.id == eventId }
+            if (index < 0) return false
+            val old = target.events[index]
+            val flags = (old.reviewFlags - SleepEvent.REVIEW_IMPORTANT) + SleepEvent.REVIEW_EDITED
+            target.events[index] = old.copy(
+                userLabel = userLabel,
+                reviewFlags = if (important) flags + SleepEvent.REVIEW_IMPORTANT else flags
+            )
+            target.segments.clear()
+            writeRoot(root.running, root.current, root.history)
+            true
+        }
+
+    fun stop(sessionId: String? = null): SleepSession? = synchronized(lock) {
         val root = cachedRoot() ?: return null
         if (!root.running || root.current == null) return null
         val current = root.current
+        if (sessionId != null && current.id != sessionId) return null
         current.endMs = System.currentTimeMillis()
+        current.events.replaceAll(::recoverPending)
         current.materializeSegments()
         val history = root.history.toMutableList()
         history.add(0, current)
@@ -123,6 +195,22 @@ class SessionStore(context: Context) {
         writeRoot(running = false, current = null, history = history)
         current
     }
+
+    private fun recoverPending(event: SleepEvent): SleepEvent =
+        if (event.classificationStatus != ClassificationStatus.PENDING) event else event.copy(
+            type = NightEventType.UNKNOWN.name,
+            classificationStatus = ClassificationStatus.FAILED,
+            confidence = 0f,
+            classScores = emptyMap(),
+            suggestedTypes = emptyList(),
+            classificationReason = "stopped_before_analysis",
+            revision = event.revision.coerceAtLeast(2),
+            clipStatus = when {
+                !event.clipRelativePath.isNullOrEmpty() -> ClipStatus.SAVED
+                event.clipStatus == ClipStatus.DISABLED -> ClipStatus.DISABLED
+                else -> ClipStatus.FAILED
+            }
+        )
 
     fun deleteOne(sessionId: String): Boolean = synchronized(lock) {
         val root = cachedRoot() ?: return false
@@ -167,12 +255,8 @@ class SessionStore(context: Context) {
     private fun fileLastModified(): Long = if (file.exists()) file.lastModified() else -1L
 
     private fun readAndCache(): RootCache? {
-        if (!file.exists()) {
-            cacheRef.set(null)
-            return null
-        }
         return try {
-            val text = file.readText()
+            val text = atomicFile.openRead().bufferedReader().use { it.readText() }
             val o = JSONObject(text)
             val running = o.optBoolean("running", false)
             val current = if (running) {
@@ -204,7 +288,16 @@ class SessionStore(context: Context) {
         val arr = JSONArray()
         for (s in history) arr.put(toJson(s))
         root.put("history", arr)
-        file.writeText(root.toString())
+        var output: FileOutputStream? = null
+        try {
+            output = atomicFile.startWrite()
+            output.write(root.toString().toByteArray(Charsets.UTF_8))
+            atomicFile.finishWrite(output)
+        } catch (error: Throwable) {
+            output?.let { atomicFile.failWrite(it) }
+            cacheRef.set(null)
+            throw error
+        }
         cacheRef.set(
             RootCache(
                 filePath = file.absolutePath,
@@ -229,12 +322,22 @@ class SessionStore(context: Context) {
                     .put("timeMs", e.timeMs)
                     .put("endMs", e.endMs)
                     .put("type", e.type)
-                    .put("peakLevel", e.peakLevel)
-                    .put("confidence", e.confidence.toDouble())
+                    .put("peakLevel", e.peakLevel.takeIf { it.isFinite() } ?: 0.0)
+                    .put("confidence", e.confidence.takeIf { it.isFinite() }?.toDouble() ?: 0.0)
                     .put("clipRelativePath", e.clipRelativePath ?: JSONObject.NULL)
                     .put("note", e.note ?: JSONObject.NULL)
                     .put("algoVersion", e.algoVersion ?: JSONObject.NULL)
                     .put("features", JSONObject(e.features.filterValues { it.isFinite() }))
+                    .put("detectionConfidence", e.detectionConfidence.takeIf { it.isFinite() }?.toDouble() ?: 0.0)
+                    .put("classificationStatus", e.classificationStatus.name)
+                    .put("classScores", JSONObject(e.classScores.filterValues { it.isFinite() }))
+                    .put("suggestedTypes", JSONArray(e.suggestedTypes))
+                    .put("modelVersion", e.modelVersion ?: JSONObject.NULL)
+                    .put("classificationReason", e.classificationReason ?: JSONObject.NULL)
+                    .put("clipStatus", e.clipStatus.name)
+                    .put("reviewFlags", JSONArray(e.reviewFlags.toList()))
+                    .put("userLabel", e.userLabel ?: JSONObject.NULL)
+                    .put("revision", e.revision)
             )
         }
         o.put("events", arr)
@@ -261,9 +364,9 @@ class SessionStore(context: Context) {
         val clips = JSONArray()
         for (p in seg.representativeClipPaths) clips.put(p)
         o.put("representativeClipPaths", clips)
-        o.put("peakConfidence", seg.peakConfidence.toDouble())
-        o.put("peakDb", seg.peakDb)
-        o.put("snoreMinutes", seg.snoreMinutes.toDouble())
+        o.put("peakConfidence", seg.peakConfidence.takeIf { it.isFinite() }?.toDouble() ?: 0.0)
+        o.put("peakDb", seg.peakDb.takeIf { it.isFinite() } ?: 0.0)
+        o.put("snoreMinutes", seg.snoreMinutes.takeIf { it.isFinite() }?.toDouble() ?: 0.0)
         val aux = JSONArray()
         for (a in seg.auxFlags) aux.put(a)
         o.put("auxFlags", aux)
@@ -295,9 +398,9 @@ class SessionStore(context: Context) {
             labels = labels,
             eventIds = stringList("eventIds"),
             representativeClipPaths = stringList("representativeClipPaths"),
-            peakConfidence = o.optDouble("peakConfidence", 0.0).toFloat(),
-            peakDb = o.optDouble("peakDb", 0.0),
-            snoreMinutes = o.optDouble("snoreMinutes", 0.0).toFloat(),
+            peakConfidence = o.optDouble("peakConfidence", 0.0).toFloat().takeIf { it.isFinite() } ?: 0f,
+            peakDb = o.optDouble("peakDb", 0.0).takeIf { it.isFinite() } ?: 0.0,
+            snoreMinutes = o.optDouble("snoreMinutes", 0.0).toFloat().takeIf { it.isFinite() } ?: 0f,
             auxFlags = stringList("auxFlags"),
             algoVersion = if (o.isNull("algoVersion")) null else o.optString("algoVersion"),
             segmentVersion = o.optString("segmentVersion", "seg-v1")
@@ -328,12 +431,30 @@ class SessionStore(context: Context) {
                     timeMs = e.getLong("timeMs"),
                     endMs = e.optLong("endMs", e.getLong("timeMs")),
                     type = e.getString("type"),
-                    peakLevel = e.optDouble("peakLevel", 0.0),
-                    confidence = e.optDouble("confidence", 1.0).toFloat(),
+                    peakLevel = e.optDouble("peakLevel", 0.0).takeIf { it.isFinite() } ?: 0.0,
+                    confidence = e.optDouble("confidence", 1.0).toFloat().takeIf { it.isFinite() } ?: 0f,
                     clipRelativePath = if (e.isNull("clipRelativePath")) null else e.optString("clipRelativePath"),
                     note = if (e.isNull("note")) null else e.optString("note"),
                     algoVersion = if (e.isNull("algoVersion")) null else e.optString("algoVersion"),
-                    features = features
+                    features = features,
+                    detectionConfidence = e.optDouble("detectionConfidence", 0.0).toFloat().takeIf { it.isFinite() } ?: 0f,
+                    classificationStatus = ClassificationStatus.entries.firstOrNull {
+                        it.name == e.optString("classificationStatus")
+                    } ?: ClassificationStatus.LEGACY,
+                    classScores = e.optJSONObject("classScores")?.let { scores ->
+                        scores.keys().asSequence().mapNotNull { key ->
+                            scores.optDouble(key).toFloat().takeIf { it.isFinite() }?.let { key to it }
+                        }.toMap()
+                    } ?: emptyMap(),
+                    suggestedTypes = stringList(e, "suggestedTypes"),
+                    modelVersion = nullableString(e, "modelVersion"),
+                    classificationReason = nullableString(e, "classificationReason"),
+                    clipStatus = ClipStatus.entries.firstOrNull {
+                        it.name == e.optString("clipStatus")
+                    } ?: ClipStatus.LEGACY,
+                    reviewFlags = stringList(e, "reviewFlags").toSet(),
+                    userLabel = nullableString(e, "userLabel"),
+                    revision = e.optLong("revision", 0L)
                 )
             )
         }
@@ -355,6 +476,12 @@ class SessionStore(context: Context) {
 
     /** Public JSON helpers for export. */
     fun sessionToExportJson(s: SleepSession): JSONObject = toJson(s)
+
+    private fun nullableString(o: JSONObject, key: String): String? =
+        if (!o.has(key) || o.isNull(key)) null else o.optString(key)
+
+    private fun stringList(o: JSONObject, key: String): List<String> =
+        o.optJSONArray(key)?.let { a -> (0 until a.length()).map { a.getString(it) } } ?: emptyList()
 
     companion object {
         const val MAX_HISTORY = 90

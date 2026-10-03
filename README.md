@@ -8,6 +8,10 @@
 
 Minimal Android sleep tracker driven by the **microphone** (phone can stay on the nightstand—no mattress placement). One-tap start/stop, segment timeline, short key-event clips, local-only storage.
 
+**Development 0.4.0:** independent sound detection, real pre/post-roll, on-device YAMNet suggestions,
+and explicit uncertain/failed analysis with reviewable recordings. See [Audio v2](docs/audio-v2.md).
+This is not a clinical detector or a claim of validated classification accuracy.
+
 | | |
 |---|---|
 | **Package** | `com.i3u8.sleepdesk` |

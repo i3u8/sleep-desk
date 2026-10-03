@@ -26,3 +26,6 @@ google-services.json
 .cxx/
 *.hprof
 sleep-desk-v*.apk
+__pycache__/
+*.py[cod]
+/private-analysis/

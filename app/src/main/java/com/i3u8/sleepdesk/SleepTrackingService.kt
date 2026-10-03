@@ -10,6 +10,7 @@ import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
 import android.os.PowerManager
+import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
 import com.i3u8.sleepdesk.audio.AudioAlgoConfig
@@ -18,8 +19,15 @@ import com.i3u8.sleepdesk.audio.NightAudioEngine
 import com.i3u8.sleepdesk.audio.NightAudioEngineImpl
 import com.i3u8.sleepdesk.audio.NightAudioListener
 import com.i3u8.sleepdesk.audio.NightEvent
+import com.i3u8.sleepdesk.audio.EventPublicationException
 import com.i3u8.sleepdesk.data.SessionStore
 import com.i3u8.sleepdesk.data.SleepEvent
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /**
  * FGS (microphone): owns [NightAudioEngine] lifecycle + secondary non-mic signals.
@@ -31,6 +39,11 @@ class SleepTrackingService : Service(), NightAudioListener {
     private lateinit var audioEngine: NightAudioEngine
     private var wakeLock: PowerManager.WakeLock? = null
     private var secondary: SecondarySignals? = null
+    private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+    private var stopping = false
+    private var ownedSessionId: String? = null
+    private var cleanupComplete = false
+    private var terminalError: String? = null
 
     override fun onCreate() {
         super.onCreate()
@@ -47,6 +60,7 @@ class SleepTrackingService : Service(), NightAudioListener {
                 return START_NOT_STICKY
             }
             else -> {
+                if (stopping) return START_NOT_STICKY
                 val notification = buildNotification(getString(R.string.notif_tracking))
                 if (Build.VERSION.SDK_INT >= 34) {
                     ServiceCompat.startForeground(
@@ -60,6 +74,7 @@ class SleepTrackingService : Service(), NightAudioListener {
                 }
                 acquireWakeLock()
                 val session = store.loadCurrent() ?: store.startNew()
+                ownedSessionId = session.id
                 if (!audioEngine.isRunning()) {
                     audioEngine.start(session.id, AudioAlgoConfig())
                 }
@@ -77,15 +92,19 @@ class SleepTrackingService : Service(), NightAudioListener {
                 .putExtra(EXTRA_EVENT_TYPE, event.type.name)
                 .putExtra(EXTRA_EVENT_ID, event.id)
                 .putExtra(EXTRA_HAS_CLIP, !event.clipRelativePath.isNullOrEmpty())
+                .putExtra(EXTRA_CLASSIFICATION_STATUS, event.classificationStatus.name)
         )
     }
 
     override fun onEngineError(t: Throwable) {
-        val nm = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
-        nm.notify(
-            NOTIFICATION_ID,
-            buildNotification(getString(R.string.notif_mic_error))
-        )
+        serviceScope.launch {
+            terminalError = getString(
+                if (t is EventPublicationException) R.string.notif_storage_error else R.string.notif_mic_error
+            )
+            val nm = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
+            nm.notify(NOTIFICATION_ID + 1, buildNotification(terminalError!!))
+            finishAndStop()
+        }
     }
 
     private fun startSecondary() {
@@ -117,14 +136,29 @@ class SleepTrackingService : Service(), NightAudioListener {
     }
 
     private fun finishAndStop() {
-        audioEngine.stop()
+        if (stopping) return
+        stopping = true
         secondary?.stop()
         secondary = null
-        store.stop()
-        releaseWakeLock()
-        stopForeground(STOP_FOREGROUND_REMOVE)
-        sendBroadcast(Intent(ACTION_STOPPED).setPackage(packageName))
-        stopSelf()
+        val owner = ownedSessionId
+        serviceScope.launch {
+            try {
+                withContext(Dispatchers.IO) {
+                    audioEngine.stop()
+                    if (owner != null) store.stop(owner)
+                }
+                cleanupComplete = true
+            } catch (failure: Exception) {
+                Log.e("SleepTrackingService", "Unable to finish session cleanly", failure)
+                terminalError = getString(R.string.notif_storage_error)
+            } finally {
+                releaseWakeLock()
+                stopForeground(STOP_FOREGROUND_REMOVE)
+                sendBroadcast(Intent(ACTION_STOPPED).setPackage(packageName)
+                    .putExtra(EXTRA_ERROR, terminalError))
+                stopSelf()
+            }
+        }
     }
 
     private fun acquireWakeLock() {
@@ -135,15 +169,30 @@ class SleepTrackingService : Service(), NightAudioListener {
         }
     }
 
+    @Synchronized
     private fun releaseWakeLock() {
         wakeLock?.let { if (it.isHeld) it.release() }
         wakeLock = null
     }
 
     override fun onDestroy() {
-        audioEngine.stop()
         secondary?.stop()
-        releaseWakeLock()
+        secondary = null
+        serviceScope.cancel()
+        // System-driven destruction must not synchronously wait for codecs on the main thread.
+        if (!cleanupComplete) {
+            val owner = ownedSessionId
+            Thread({
+                try {
+                    audioEngine.stop()
+                    if (owner != null) store.stop(owner)
+                } catch (failure: Exception) {
+                    Log.e("SleepTrackingService", "Deferred session cleanup failed", failure)
+                } finally {
+                    releaseWakeLock()
+                }
+            }, "night-service-cleanup").start()
+        }
         super.onDestroy()
     }
 
@@ -189,6 +238,8 @@ class SleepTrackingService : Service(), NightAudioListener {
         const val EXTRA_EVENT_TYPE = "event_type"
         const val EXTRA_EVENT_ID = "event_id"
         const val EXTRA_HAS_CLIP = "has_clip"
+        const val EXTRA_CLASSIFICATION_STATUS = "classification_status"
+        const val EXTRA_ERROR = "tracking_error"
         const val CHANNEL_ID = "sleep_tracking"
         const val NOTIFICATION_ID = 1001
     }

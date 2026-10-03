@@ -39,6 +39,25 @@ class SessionDetailBottomSheet : BottomSheetDialogFragment() {
     override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
         sessionId = requireArguments().getString(ARG_ID) ?: return
         val id = sessionId!!
+        parentFragmentManager.setFragmentResultListener(
+            EventDetailBottomSheet.RESULT_REVIEW_SESSION, viewLifecycleOwner
+        ) { _, _ ->
+            val updated = SessionStore(requireContext()).ensureSegmentsPersisted(id)
+            if (updated != null) {
+                loadedSession = updated
+                bindHeader(view, updated)
+                view.findViewById<NightTimelineView>(R.id.nightTimeline)
+                    .setSession(updated, showActivityRibbon = true) { openSegment(id, it.id) }
+                view.findViewById<RecyclerView>(R.id.rvSessionSegments).adapter =
+                    SegmentsAdapter(updated.segments) { openSegment(id, it.id) }
+                if (eventsExpanded) {
+                    view.findViewById<RecyclerView>(R.id.rvSessionEvents).adapter =
+                        EventsAdapter(updated.events.sortedByDescending { it.timeMs }) {
+                            EventDetailBottomSheet.newInstance(it, id).show(parentFragmentManager, EventDetailBottomSheet.TAG)
+                        }
+                }
+            }
+        }
         val btnDelete = view.findViewById<MaterialButton>(R.id.btnDeleteSession)
         val btnExport = view.findViewById<MaterialButton>(R.id.btnExportSession)
         val btnExpand = view.findViewById<MaterialButton>(R.id.btnExpandAllEvents)
@@ -108,7 +127,7 @@ class SessionDetailBottomSheet : BottomSheetDialogFragment() {
                         rvEvents.visibility = View.VISIBLE
                         rvEvents.layoutManager = LinearLayoutManager(requireContext())
                         rvEvents.adapter = EventsAdapter(allEvents) { e ->
-                            EventDetailBottomSheet.newInstance(e)
+                            EventDetailBottomSheet.newInstance(e, session.id)
                                 .show(parentFragmentManager, EventDetailBottomSheet.TAG)
                         }
                     }

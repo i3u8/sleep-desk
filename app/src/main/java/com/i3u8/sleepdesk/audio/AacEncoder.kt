@@ -5,6 +5,7 @@ import android.media.MediaCodecInfo
 import android.media.MediaFormat
 import android.media.MediaMuxer
 import android.util.Log
+import android.os.SystemClock
 import java.io.File
 import java.nio.ByteBuffer
 
@@ -45,8 +46,11 @@ object AacEncoder {
             var outputDone = false
             var presentationUs = 0L
             val bytesPerSample = 2
+            val deadline = SystemClock.elapsedRealtime() + 30_000L
 
             while (!outputDone) {
+                if (Thread.currentThread().isInterrupted) throw InterruptedException("AAC cancelled")
+                check(SystemClock.elapsedRealtime() < deadline) { "AAC encoder timeout" }
                 if (!inputDone) {
                     val inIx = codec.dequeueInputBuffer(TIMEOUT_US)
                     if (inIx >= 0) {

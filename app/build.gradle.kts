@@ -11,8 +11,9 @@ android {
         applicationId = "com.i3u8.sleepdesk"
         minSdk = 26
         targetSdk = 34
-        versionCode = 9
-        versionName = "0.3.2"
+        versionCode = 10
+        versionName = "0.4.0"
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
     // CI / local release signing via env (never commit the keystore).
@@ -69,11 +70,21 @@ android {
     }
     buildFeatures {
         viewBinding = true
+        buildConfig = true
+    }
+    androidResources {
+        noCompress += "tflite"
     }
 }
 
 dependencies {
     testImplementation("junit:junit:4.13.2")
+    androidTestImplementation("androidx.test:runner:1.6.2")
+    androidTestImplementation("androidx.test:rules:1.6.1")
+    androidTestImplementation("androidx.test.ext:junit:1.2.1")
+    androidTestImplementation("androidx.test:core-ktx:1.6.1")
+    androidTestImplementation("androidx.test.espresso:espresso-core:3.6.1")
+    implementation("org.tensorflow:tensorflow-lite:2.17.0")
     implementation("androidx.core:core-ktx:1.13.1")
     implementation("androidx.appcompat:appcompat:1.7.0")
     implementation("com.google.android.material:material:1.12.0")

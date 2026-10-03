@@ -41,6 +41,26 @@ class SegmentDetailBottomSheet : BottomSheetDialogFragment() {
     override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
         sessionId = requireArguments().getString(ARG_SESSION) ?: return
         segmentId = requireArguments().getString(ARG_SEGMENT) ?: return
+        parentFragmentManager.setFragmentResultListener(
+            EventDetailBottomSheet.RESULT_REVIEW_SEGMENT, viewLifecycleOwner
+        ) { _, result ->
+            val session = SessionStore(requireContext()).ensureSegmentsPersisted(sessionId!!)
+            val segment = session?.segments?.firstOrNull { result.getString("id") in it.eventIds }
+            if (session != null && segment != null) {
+                segmentId = segment.id
+                bindHeader(view, segment)
+                bindClips(view, session, segment)
+                bindEventsExpand(view, session, segment)
+                if (eventsExpanded) {
+                    view.findViewById<RecyclerView>(R.id.rvSegEvents).adapter =
+                        EventsAdapter(SegmentBuilder.eventsForSegment(session, segment)) {
+                            EventDetailBottomSheet.newInstance(it, session.id)
+                                .show(parentFragmentManager, EventDetailBottomSheet.TAG)
+                        }
+                    view.findViewById<MaterialButton>(R.id.btnExpandEvents).setText(R.string.segment_collapse_events)
+                }
+            }
+        }
         // Load on IO; events list stays lazy until expand
         view.findViewById<android.widget.TextView>(R.id.tvSegDetailLabel).text = "…"
         viewLifecycleOwner.lifecycleScope.launch {
@@ -99,7 +119,7 @@ class SegmentDetailBottomSheet : BottomSheetDialogFragment() {
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT
             ).apply { if (index > 0) topMargin = (8 * resources.displayMetrics.density).toInt() }
-            val type = EventLabels.typeLabel(ctx, e.type)
+            val type = EventLabels.eventTitle(ctx, e)
             btn.text = getString(R.string.segment_play_clip, index + 1, type, timeFmt.format(Date(e.timeMs)))
             btn.isAllCaps = false
             btn.setOnClickListener { playClip(btn, e) }
@@ -144,7 +164,7 @@ class SegmentDetailBottomSheet : BottomSheetDialogFragment() {
                 rv.visibility = View.VISIBLE
                 rv.layoutManager = LinearLayoutManager(requireContext())
                 rv.adapter = EventsAdapter(events) { e ->
-                    EventDetailBottomSheet.newInstance(e)
+                    EventDetailBottomSheet.newInstance(e, session.id)
                         .show(parentFragmentManager, EventDetailBottomSheet.TAG)
                 }
                 btn.text = getString(R.string.segment_collapse_events)

@@ -1,7 +1,17 @@
 package com.i3u8.sleepdesk.audio
 
 enum class NightEventType {
-    SNORE, COUGH, SPEECH, NIGHT_WAKE_SOUND, ENV_NOISE, ABNORMAL, FALSE_TRIGGER
+    SNORE, COUGH, SPEECH, NIGHT_WAKE_SOUND, ENV_NOISE, ABNORMAL, FALSE_TRIGGER,
+    UNKNOWN, BREATHING, BED_MOVEMENT, CONTACT_SOUND
+}
+
+enum class ClassificationStatus { LEGACY, PENDING, SUGGESTED, UNCERTAIN, FAILED }
+
+enum class ClipStatus { LEGACY, PENDING, SAVED, QUOTA_REACHED, DISABLED, FAILED }
+
+object AudioPipelineVersion {
+    const val CURRENT = "audio-v2.0"
+    const val PREPROCESSING = "pcm16-16k-fixed-gain-v1"
 }
 
 data class NightEvent(
@@ -12,7 +22,21 @@ data class NightEvent(
     val confidence: Float,
     val clipRelativePath: String? = null,
     val features: Map<String, Float> = emptyMap(),
-    val algoVersion: String = RuleClassifier.VERSION
+    val algoVersion: String = AudioPipelineVersion.CURRENT,
+    /** Detection support, separate from uncalibrated classification support [confidence]. */
+    val detectionConfidence: Float = 0f,
+    val classificationStatus: ClassificationStatus = ClassificationStatus.LEGACY,
+    val classScores: Map<String, Float> = emptyMap(),
+    val suggestedTypes: List<String> = emptyList(),
+    val modelVersion: String? = null,
+    val classificationReason: String? = null,
+    val clipStatus: ClipStatus = ClipStatus.LEGACY,
+    val reviewFlags: Set<String> = emptySet(),
+    val userLabel: String? = null,
+    /** Pins async updates to their originating session, even after tracking stops. */
+    val sessionId: String? = null,
+    /** Monotone within an event: detected=0, context/clip=1, final analysis=2. */
+    val revision: Long = 0
 )
 
 /**
@@ -28,9 +52,8 @@ data class AudioAlgoConfig(
     /** >1.0 = more sensitive (lower effective margin). Default high. */
     val sensitivity: Float = 1.25f,
     val preRollMs: Int = 2_000,
-    /** Reserved: synchronous clip saving currently includes no future post-roll. */
     val postRollMs: Int = 2_000,
-    val maxClipMs: Int = 8_000,
+    val maxClipMs: Int = 12_000,
     val minCandidateMs: Int = 150,
     val maxCandidateMs: Int = 8_000,
     val saveSpeechClips: Boolean = true,
@@ -49,7 +72,10 @@ data class AudioAlgoConfig(
     /** Fixed software gain applied before energy/features/clip encoding; system AGC remains unchanged. */
     val digitalGainDb: Float = 6f,
     val aacBitrate: Int = 40_000,
-    val sessionWarmupMs: Long = 12_000L
+    val sessionWarmupMs: Long = 12_000L,
+    val maxAnalysisQueue: Int = 8,
+    val maxClipsPerHour: Int = 120,
+    val maxClipsPerSession: Int = 360
 ) {
     fun effectiveMarginDb(): Float = (marginDb / sensitivity.coerceAtLeast(0.5f)).coerceIn(3f, 18f)
 

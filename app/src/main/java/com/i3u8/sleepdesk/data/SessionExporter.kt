@@ -64,7 +64,7 @@ class SessionExporter(context: Context) {
         ZipOutputStream(BufferedOutputStream(FileOutputStream(zipFile))).use { zos ->
             val meta = JSONObject()
             meta.put("exportVersion", 1)
-            meta.put("appVersion", "0.3.2")
+            meta.put("appVersion", appContext.packageManager.getPackageInfo(appContext.packageName, 0).versionName)
             meta.put("exportedAtMs", System.currentTimeMillis())
             val arr = JSONArray()
             for (s in sessions) {
@@ -78,17 +78,18 @@ class SessionExporter(context: Context) {
 
             val seen = HashSet<String>()
             for (s in sessions) {
-                for (seg in s.segments) {
-                    for (rel in seg.representativeClipPaths) {
-                        if (!seen.add(rel)) continue
-                        val src = clipStore.fileForRelative(rel)
-                        if (!src.exists() || !src.isFile) continue
-                        val entryName = "clips/" + rel.removePrefix("audio_clips/")
-                        zos.putNextEntry(ZipEntry(entryName))
-                        src.inputStream().use { it.copyTo(zos) }
-                        zos.closeEntry()
-                        clipCount++
-                    }
+                val paths = s.segments.flatMap { it.representativeClipPaths } +
+                    s.events.filter { it.userLabel != null || it.reviewFlags.isNotEmpty() }
+                        .mapNotNull { it.clipRelativePath }
+                for (rel in paths) {
+                    if (!seen.add(rel)) continue
+                    val src = clipStore.fileForRelative(rel)
+                    if (!src.exists() || !src.isFile) continue
+                    val entryName = "clips/" + rel.removePrefix("audio_clips/")
+                    zos.putNextEntry(ZipEntry(entryName))
+                    src.inputStream().use { it.copyTo(zos) }
+                    zos.closeEntry()
+                    clipCount++
                 }
             }
         }

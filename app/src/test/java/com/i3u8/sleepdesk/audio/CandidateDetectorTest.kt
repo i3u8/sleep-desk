@@ -79,10 +79,10 @@ class CandidateDetectorTest {
             stream.samples.subList(event.startSample.toInt(), event.endSample.toInt()).toShortArray(),
             event.pcm
         )
-        assertArrayEquals(event.pcm, event.clipPcm)
+        assertArrayEquals(event.pcm, event.clipPcm.copyOfRange(32000, event.clipPcm.size))
         assertEquals(8000f, stream.features(event).durationMs, 0.001f)
-        assertEquals(0f, event.clipFeatures(config.sampleRate).getValue("candidateOffsetMs"), 0f)
-        assertEquals(8000f, event.clipFeatures(config.sampleRate).getValue("clipDurationMs"), 0f)
+        assertEquals(2000f, event.clipFeatures(config.sampleRate).getValue("candidateOffsetMs"), 0f)
+        assertEquals(10000f, event.clipFeatures(config.sampleRate).getValue("clipDurationMs"), 0f)
     }
 
     @Test fun preRollAndFullCandidateSurviveRingWrap() {
@@ -281,5 +281,45 @@ class CandidateDetectorTest {
             assertEquals(duration.toFloat(),
                 event.clipFeatures(config.sampleRate).getValue("clipDurationMs"), 0f)
         }
+    }
+
+    @Test fun stopRetainsRawMinimumEvenBeforeSmoothedGateOpens() {
+        val stream = Stream(config.copy(energySmoothMs = 2000))
+        stream.feed(3000, 1000)
+        val onset = stream.samples.size
+        stream.feed(150, 2500)
+        val event = stream.detector.flush()!!
+        assertEquals(onset.toLong(), event.startSample)
+        assertEquals(2400, event.pcm.size)
+        assertTrue("STOPPED" in event.contextFlags)
+        assertNull(stream.detector.flush())
+    }
+
+    @Test fun defaultGateFindsMultipleEventsInTwoAndHalfSecondsOfRepeatedSound() {
+        val stream = Stream(AudioAlgoConfig())
+        stream.feed(13000, 32)
+        repeat(5) {
+            stream.feed(300, 8000)
+            stream.feed(200, 32)
+        }
+        stream.detector.flush()?.let(stream.events::add)
+        assertEquals(5, stream.events.size)
+        stream.events.zipWithNext().forEach { (a, b) ->
+            assertTrue(a.endSample < b.startSample)
+        }
+        stream.events.forEach { assertEquals(4800, it.pcm.size) }
+    }
+
+    @Test fun stopDiscardsSubminimumRawBurstAndDoesNotDuplicateReleasedEvent() {
+        val short = Stream(config)
+        short.feed(1500, 32)
+        short.feed(135, 8000)
+        assertNull(short.detector.flush())
+        val complete = Stream(config)
+        complete.feed(1500, 32)
+        complete.feed(300, 8000)
+        complete.feed(1500, 32)
+        assertEquals(1, complete.events.size)
+        assertNull(complete.detector.flush())
     }
 }

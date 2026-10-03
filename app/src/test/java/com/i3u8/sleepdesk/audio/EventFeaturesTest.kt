@@ -14,7 +14,7 @@ class EventFeaturesTest {
         )
         val stored = SleepEvent.fromNightEvent(event)
         assertEquals(event.features, stored.features)
-        assertEquals(RuleClassifier.VERSION, stored.algoVersion)
+        assertEquals(AudioPipelineVersion.CURRENT, stored.algoVersion)
         assertEquals(-25.0, stored.peakLevel, 0.001)
     }
 

@@ -1,6 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
-<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content">
+<LinearLayout
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
     android:orientation="vertical"
@@ -13,6 +16,18 @@
         android:layout_gravity="center_horizontal"
         android:layout_marginBottom="16dp"
         android:background="@color/muted" />
+
+    <TextView
+        android:id="@+id/tvDetailStatus"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:textColor="@color/on_bg" />
+
+    <TextView
+        android:id="@+id/tvDetailCandidates"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:textColor="@color/muted" />
 
     <TextView
         android:id="@+id/tvDetailType"
@@ -59,4 +74,28 @@
         android:textSize="16sp"
         app:backgroundTint="@color/accent"
         app:cornerRadius="16dp" />
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:labelFor="@id/spinnerReviewLabel"
+        android:text="@string/review_label"
+        android:textColor="@color/on_bg" />
+    <Spinner
+        android:id="@+id/spinnerReviewLabel"
+        android:layout_width="match_parent"
+        android:layout_height="48dp"
+        android:spinnerMode="dropdown" />
+    <CheckBox
+        android:id="@+id/checkReviewImportant"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:minHeight="48dp"
+        android:text="@string/review_important"
+        android:textColor="@color/on_bg" />
+    <com.google.android.material.button.MaterialButton
+        android:id="@+id/btnSaveReview"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="@string/review_save" />
 </LinearLayout>
+</ScrollView>

@@ -17,7 +17,7 @@ object SegmentLabels {
             "MIXED" -> R.string.segment_mixed
             else -> null
         }
-        return if (res != null) context.getString(res) else label
+        return if (res != null) context.getString(res) else EventLabels.typeLabel(context, label)
     }
 
     fun shortTypeName(context: Context, type: String): String {

@@ -65,7 +65,7 @@ object NightTimelineHeuristics {
     fun interruptTimes(session: SleepSession): LongArray {
         val list = ArrayList<Long>(32)
         for (e in session.events) {
-            if (isInterrupt(e.type)) list.add(e.timeMs)
+            if (isInterrupt(e.effectiveType)) list.add(e.timeMs)
         }
         return list.toLongArray()
     }
@@ -83,8 +83,8 @@ object NightTimelineHeuristics {
             if (e.timeMs < start || e.timeMs >= end) continue
             val idx = ((e.timeMs - start) / binMs).toInt().coerceIn(0, binCount - 1)
             when {
-                isAudioEvent(e.type) -> {
-                    scores[idx] += when (e.type) {
+                isAudioEvent(e.effectiveType) -> {
+                    scores[idx] += when (e.effectiveType) {
                         NightEventType.SNORE.name -> 0.7f
                         NightEventType.ENV_NOISE.name -> 0.5f
                         NightEventType.NIGHT_WAKE_SOUND.name,
@@ -93,7 +93,7 @@ object NightTimelineHeuristics {
                         else -> 0.8f
                     }
                 }
-                isInterrupt(e.type) -> scores[idx] += 0.6f
+                isInterrupt(e.effectiveType) -> scores[idx] += 0.6f
             }
         }
         var maxCount = 1f
@@ -121,7 +121,10 @@ object NightTimelineHeuristics {
     fun experimentalCycles(session: SleepSession, binMs: Long = 15 * 60_000L): List<CycleBand> {
         val start = session.startMs
         val end = session.endMs ?: System.currentTimeMillis()
-        val activity = activityBins(session, binMs)
+        // Unclassified and environmental sounds are records, not evidence of waking.
+        val activity = activityBins(session.copy(events = session.events.filter {
+            it.effectiveType in WAKE_WEIGHTED || it.effectiveType == NightEventType.SNORE.name || isInterrupt(it.effectiveType)
+        }.toMutableList()), binMs)
         if (activity.isEmpty()) return emptyList()
 
         val ultradianMs = 90 * 60_000L
@@ -138,15 +141,15 @@ object NightTimelineHeuristics {
             val windowEvents = session.events.filter { it.timeMs in bin.startMs until bin.endMs }
             for (e in windowEvents) {
                 when {
-                    e.type in WAKE_WEIGHTED || e.type == SleepEvent.TYPE_SCREEN_ON -> {
+                    e.effectiveType in WAKE_WEIGHTED || e.effectiveType == SleepEvent.TYPE_SCREEN_ON -> {
                         wakeScore += 0.45f
                         quietScore -= 0.3f
                     }
-                    e.type == NightEventType.SPEECH.name -> {
+                    e.effectiveType == NightEventType.SPEECH.name -> {
                         remScore += 0.25f
                         wakeScore += 0.15f
                     }
-                    e.type == NightEventType.SNORE.name -> {
+                    e.effectiveType == NightEventType.SNORE.name -> {
                         quietScore += 0.2f
                         remScore -= 0.1f
                     }

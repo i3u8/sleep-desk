@@ -11,6 +11,7 @@ import kotlin.math.min
  * merge overlapping/near heterogenous bouts to MIXED → pick representative clips (strategy A).
  */
 object SegmentBuilder {
+    const val VERSION = "seg-v3"
 
     private val SEGMENT_TYPES = setOf(
         NightEventType.SNORE.name,
@@ -58,9 +59,11 @@ object SegmentBuilder {
     ): List<NightSegment> {
         val clippedEnd = sessionEndMs.coerceAtLeast(sessionStartMs + 1_000L)
         val audio = events
-            .filter { it.type in SEGMENT_TYPES }
+            .filter { it.effectiveType in SEGMENT_TYPES || (it.effectiveType !in AUX_TYPES &&
+                (it.effectiveType != NightEventType.FALSE_TRIGGER.name ||
+                    it.classificationStatus != com.i3u8.sleepdesk.audio.ClassificationStatus.LEGACY)) }
             .sortedBy { it.timeMs }
-        val aux = events.filter { it.type in AUX_TYPES }
+        val aux = events.filter { it.effectiveType in AUX_TYPES }
 
         if (audio.isEmpty()) return emptyList()
 
@@ -81,7 +84,12 @@ object SegmentBuilder {
                 index = index,
                 config = config
             )
-        }.filter { it.eventIds.size >= config.minEventsToShow }
+        }.filter { segment ->
+            segment.eventIds.size >= config.minEventsToShow ||
+                audio.any { e -> e.id in segment.eventIds && (e.effectiveType == NightEventType.UNKNOWN.name ||
+                    e.classificationStatus in setOf(com.i3u8.sleepdesk.audio.ClassificationStatus.PENDING,
+                        com.i3u8.sleepdesk.audio.ClassificationStatus.FAILED)) }
+        }
     }
 
     private fun mergeGapFor(type: String, config: SegmentConfig): Long = when (type) {
@@ -93,17 +101,17 @@ object SegmentBuilder {
     private fun mergeBouts(audio: List<SleepEvent>, config: SegmentConfig): List<Bout> {
         if (audio.isEmpty()) return emptyList()
         val out = mutableListOf<Bout>()
-        var cur = Bout(audio.first().type, mutableListOf(audio.first()))
+        var cur = Bout(audio.first().effectiveType, mutableListOf(audio.first()))
         for (i in 1 until audio.size) {
             val e = audio[i]
             val prev = cur.events.last()
             val prevEnd = max(prev.endMs, prev.timeMs)
             val gap = e.timeMs - prevEnd
-            if (e.type == cur.type && gap <= mergeGapFor(e.type, config)) {
+            if (e.effectiveType == cur.type && gap <= mergeGapFor(e.effectiveType, config)) {
                 cur.events.add(e)
             } else {
                 out.add(cur)
-                cur = Bout(e.type, mutableListOf(e))
+                cur = Bout(e.effectiveType, mutableListOf(e))
             }
         }
         out.add(cur)
@@ -176,17 +184,17 @@ object SegmentBuilder {
 
         val labels = linkedMapOf<String, Int>()
         for (e in deduped) {
-            labels[e.type] = (labels[e.type] ?: 0) + 1
+            labels[e.effectiveType] = (labels[e.effectiveType] ?: 0) + 1
         }
         val primary = pickPrimaryLabel(labels, deduped, config)
 
         val auxFlags = aux
             .filter { it.timeMs in start..end }
-            .map { it.type }
+            .map { it.effectiveType }
             .distinct()
 
         val snoreMinutes = deduped
-            .filter { it.type == NightEventType.SNORE.name }
+            .filter { it.effectiveType == NightEventType.SNORE.name }
             .sumOf { max(it.endMs - it.timeMs, 0L).toDouble() }
             .toFloat() / 60_000f
 
@@ -208,7 +216,7 @@ object SegmentBuilder {
             snoreMinutes = snoreMinutes,
             auxFlags = auxFlags,
             algoVersion = deduped.firstOrNull()?.algoVersion,
-            segmentVersion = "seg-v1"
+            segmentVersion = VERSION
         )
     }
 
@@ -225,7 +233,7 @@ object SegmentBuilder {
         data class Cand(val type: String, val count: Int, val score: Float, val peakConf: Float)
         val cands = labels.map { (type, count) ->
             val w = TYPE_WEIGHT[type] ?: 1f
-            val peakConf = events.filter { it.type == type }.maxOfOrNull { it.confidence } ?: 0f
+            val peakConf = events.filter { it.effectiveType == type }.maxOfOrNull { it.confidence } ?: 0f
             Cand(type, count, count * w, peakConf)
         }.sortedWith(
             compareByDescending<Cand> { it.score }
@@ -310,6 +318,9 @@ object SegmentBuilder {
             .mapNotNull { it.clipRelativePath }
             .distinct()
             .take(quota)
+            .plus(withClip.filter { it.userLabel != null || it.reviewFlags.isNotEmpty() }
+                .mapNotNull { it.clipRelativePath })
+            .distinct()
     }
 
     fun eventsForSegment(session: SleepSession, segment: NightSegment): List<SleepEvent> {

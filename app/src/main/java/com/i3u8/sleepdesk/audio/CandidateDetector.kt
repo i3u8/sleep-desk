@@ -9,7 +9,8 @@ internal data class CandidateAudio(
     val pcm: ShortArray,
     val clipPcm: ShortArray,
     val clipStartSample: Long,
-    val clipEndSample: Long
+    val clipEndSample: Long,
+    val contextFlags: Set<String> = emptySet()
 ) {
     fun startMs(originMs: Long, sampleRate: Int) = originMs + startSample * 1000 / sampleRate
     fun endMs(originMs: Long, sampleRate: Int) = originMs + endSample * 1000 / sampleRate
@@ -22,12 +23,13 @@ internal data class CandidateAudio(
 
 /** Sample-clock gate and PCM ownership, independent of Android and wall-clock changes. */
 internal class CandidateDetector(private val config: AudioAlgoConfig) {
+    init { validateCandidateConfig(config) }
     private fun samples(ms: Long) = ms * config.sampleRate / 1000
     private val hopSamples = samples(config.hopMs.toLong()).coerceAtLeast(1).toInt()
     private val minSamples = samples(config.minCandidateMs.toLong()).coerceAtLeast(1)
     private val maxSamples = samples(config.maxCandidateMs.toLong()).coerceAtLeast(minSamples)
     private val preSamples = samples(config.preRollMs.toLong()).coerceAtLeast(0)
-    private val ring = PcmRingBuffer((preSamples + maxSamples + hopSamples).toInt())
+    private val ring = PcmRingBuffer(checkedPcmCapacity(preSamples + maxSamples + hopSamples))
     private val floorWindow = ArrayDeque<Float>()
     private var smoothedDb = -60f
     private var initialized = false
@@ -108,13 +110,28 @@ internal class CandidateDetector(private val config: AudioAlgoConfig) {
             silenceStart = null
         }
         val quietStart = silenceStart
-        val endedBySilence = quietStart != null && end - quietStart >= samples(100)
+        // EMA release can bridge separate sounds; raw quiet also closes a valid body.
+        val endedBySilence = (quietStart != null && end - quietStart >= samples(100)) ||
+            end - rawEnd >= samples(100)
         val endedByMax = end - start >= maxSamples
         if (!endedBySilence && !endedByMax) return null
 
         // Neither EMA decay nor release debounce is raw event audio.
         val to = minOf(rawEnd, quietStart ?: end, start + maxSamples)
         val activeSamples = rawActiveSamples - (rawEnd - to).coerceAtLeast(0)
+        return finish(start, to, activeSamples,
+            if (endedByMax) setOf("CANDIDATE_LIMIT") else emptySet())
+    }
+
+    /** Drain only recorded raw audio, including a valid burst still opening the EMA gate. */
+    fun flush(): CandidateAudio? {
+        val start = candidateStart ?: rawStart ?: return null
+        val to = minOf(rawEnd, start + maxSamples)
+        return finish(start, to, rawActiveSamples - (rawEnd - to).coerceAtLeast(0),
+            setOf("STOPPED"))
+    }
+
+    private fun finish(start: Long, to: Long, activeSamples: Long, flags: Set<String>): CandidateAudio? {
         candidateStart = null
         openingStart = null
         silenceStart = null
@@ -130,7 +147,8 @@ internal class CandidateDetector(private val config: AudioAlgoConfig) {
         val oldest = (totalSamples - ring.capacity).coerceAtLeast(0)
         val clipFrom = maxOf(oldest, start - preSamples, clipTo - clipLimit)
         return CandidateAudio(
-            start, to, candidateFloor, pcm, ring.sliceSamples(clipFrom, clipTo), clipFrom, clipTo
+            start, to, candidateFloor, pcm, ring.sliceSamples(clipFrom, clipTo), clipFrom, clipTo,
+            flags
         )
     }
 
@@ -145,4 +163,24 @@ internal class CandidateDetector(private val config: AudioAlgoConfig) {
             noiseFloorDb = sorted[index]
         }
     }
+}
+
+internal fun checkedPcmCapacity(samples: Long): Int {
+    // Bound memory as well as integer arithmetic before allocating PCM.
+    require(samples in 1..16_777_216L) { "PCM capacity must be within 1..16777216 samples" }
+    return samples.toInt()
+}
+
+internal fun validateCandidateConfig(config: AudioAlgoConfig) {
+    require(config.sampleRate > 0 && config.hopMs > 0)
+    require(config.minCandidateMs > 0 && config.maxCandidateMs >= config.minCandidateMs)
+    require(config.preRollMs >= 0 && config.postRollMs >= 0 && config.maxClipMs > 0)
+    require(config.energySmoothMs > 0 && config.floorWindowMs > 0)
+    require(config.marginDb.isFinite() && config.sensitivity.isFinite() && config.sensitivity > 0f)
+    require(config.floorPercentile.isFinite())
+    require(config.sessionWarmupMs >= 0 &&
+        config.sessionWarmupMs <= Long.MAX_VALUE / config.sampleRate)
+    require(config.hopMs.toLong() * config.sampleRate / 1000 > 0)
+    checkedPcmCapacity((config.preRollMs.toLong() + config.maxCandidateMs +
+        config.postRollMs + config.hopMs) * config.sampleRate / 1000)
 }
